@@ -30,7 +30,12 @@ function chartOptions() {
       scale: { color: { range: props.colors } },
       axis: false,
       legend: false,
-      style: { stroke: "#ffffff", lineWidth: 2 }
+      style: { stroke: "#ffffff", lineWidth: 2 },
+      labels: [{
+        text: "value",
+        position: "inside",
+        style: { fill: "#ffffff", fontSize: 9, fontWeight: 700 }
+      }]
     };
   }
 
@@ -42,7 +47,7 @@ function chartOptions() {
       coordinate: { transform: [{ type: "transpose" }] },
       encode: { x: "name", y: "value", color: "name" },
       scale: {
-        x: { paddingInner: 0.62, paddingOuter: 0.18 },
+        x: { paddingInner: 0.8, paddingOuter: 0.2 },
         color: { range: props.colors },
         y: { nice: true }
       },
@@ -77,7 +82,12 @@ function chartOptions() {
         type: "point",
         data: props.data,
         encode: { x: "date", y: "value", color: "series" },
-        style: { r: 3, stroke: "#ffffff", lineWidth: 1.5 }
+        style: { r: 3, stroke: "#ffffff", lineWidth: 1.5 },
+        labels: [{
+          text: "value",
+          position: "top",
+          style: { dy: -5, fill: "#44535f", fontSize: 9, fontWeight: 600, stroke: "#ffffff", lineWidth: 3 }
+        }]
       }
     ]
   };
