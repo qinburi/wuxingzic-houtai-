@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+admin-dist/
+server/dist/
+
+# Runtime data and generated releases
+server/data/
+server/uploads/
+server/backups/
+server/releases/
+collector/data/
+public/portal-data.json
+public/portal-data.local.json
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.vite/
+.cache/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

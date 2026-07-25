@@ -1,0 +1,18 @@
+{
+  "appVersionInfo": {
+    "currentVersion": "v0.0.0",
+    "history": []
+  },
+  "ipAssetLedger": {
+    "patent": {
+      "items": [
+        ["DEMO-PATENT-001", "示例业务处理方法", "ERP", "2025-01-01", "已授权"]
+      ]
+    },
+    "copyright": {
+      "items": [
+        ["DEMO-SR-001", "示例制造管理软件", "MES", "2025-01-02", "已登记"]
+      ]
+    }
+  }
+}
