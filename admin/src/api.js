@@ -1,4 +1,9 @@
-const baseUrl = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:3100/api";
+import { demoDownload, demoRequest } from "./demo-api.js";
+
+const configuredBaseUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
+const demoRequested = new URLSearchParams(window.location.search).get("demo") === "1";
+export const isDemoMode = import.meta.env.VITE_DEMO_MODE === "true" || demoRequested || (!configuredBaseUrl && window.location.hostname.endsWith("github.io"));
+const baseUrl = configuredBaseUrl || "http://127.0.0.1:3100/api";
 
 export function getToken() {
   return sessionStorage.getItem("hannao_admin_token") || "";
@@ -10,6 +15,7 @@ export function setToken(token) {
 }
 
 export async function api(path, options = {}) {
+  if (isDemoMode) return demoRequest(path, options);
   const headers = new Headers(options.headers || {});
   if (!(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
   if (getToken()) headers.set("Authorization", `Bearer ${getToken()}`);
@@ -37,6 +43,16 @@ export function remove(path) {
 }
 
 export async function download(path, filename) {
+  if (isDemoMode) {
+    const blob = await demoDownload(path);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return;
+  }
   const headers = new Headers();
   if (getToken()) headers.set("Authorization", `Bearer ${getToken()}`);
   const response = await fetch(`${baseUrl}${path}`, { headers });

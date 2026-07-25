@@ -61,7 +61,7 @@ import {
 } from "@lucide/vue";
 import { ASSET_TYPE_LABELS, IP_KIND_LABELS, IP_LEGAL_STATUS_LABELS, PATENT_TYPE_LABELS, REVISION_STATUS_LABELS, SENSITIVITY_LABELS } from "../../shared/contracts.ts";
 import logoUrl from "../../public/assets/brand/hannao-logo-transparent.png";
-import { api, download, getToken, patch, post, remove, setToken } from "./api.js";
+import { api, download, getToken, isDemoMode, patch, post, remove, setToken } from "./api.js";
 
 const navItems = [
   { id: "dashboard", label: "工作台", icon: LayoutDashboard },
@@ -704,13 +704,13 @@ onMounted(async () => {
     <form class="login-panel" @submit.prevent="login">
       <div class="login-title">
         <span><LockKeyhole :size="18" /></span>
-        <div><h1>账号登录</h1><p>使用达铃同步的手机号</p></div>
+        <div><h1>账号登录</h1><p>{{ isDemoMode ? 'GitHub Pages 在线演示' : '使用达铃同步的手机号' }}</p></div>
       </div>
       <label><span>手机号码</span><div class="input-with-icon"><Smartphone :size="17" /><input v-model="loginForm.phone" inputmode="numeric" autocomplete="username" /></div></label>
       <label><span>登录密码</span><div class="input-with-icon"><KeyRound :size="17" /><input v-model="loginForm.password" type="password" autocomplete="current-password" /></div></label>
       <div class="login-options"><label><input type="checkbox" checked /> 保持本次登录</label><button type="button">忘记密码</button></div>
       <button class="primary login-submit" type="submit" :disabled="loginForm.busy"><RefreshCw v-if="loginForm.busy" class="spin" :size="18" /><ShieldCheck v-else :size="18" />登录管理后台</button>
-      <div class="login-state"><CircleCheck :size="15" />达铃组织同步服务正常</div>
+      <div class="login-state" :class="{ demo: isDemoMode }"><CircleCheck :size="15" />{{ isDemoMode ? '演示数据仅保存在当前浏览器' : '达铃组织同步服务正常' }}</div>
     </form>
   </div>
 
@@ -725,6 +725,7 @@ onMounted(async () => {
         </button>
       </nav>
       <div class="top-actions">
+        <span v-if="isDemoMode" class="demo-chip">演示环境</span>
         <span class="version-chip">{{ organization.settings?.currentVersion || 'v1.0.3' }}</span>
         <button type="button" title="运行状态"><Monitor :size="18" /></button>
         <button type="button" title="刷新数据" @click="hydrate"><RefreshCw :class="{ spin: loading }" :size="18" /></button>

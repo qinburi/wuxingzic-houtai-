@@ -57,6 +57,7 @@ button svg { flex: 0 0 auto; }
 .primary { color: white !important; border-color: var(--green) !important; background: var(--green) !important; }
 .login-submit { width: 100%; height: 46px; display: flex; align-items: center; justify-content: center; gap: 9px; border: 1px solid var(--green); border-radius: 4px; font-weight: 600; }
 .login-state { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 20px; color: #527265; font-size: 12px; }
+.login-state.demo { color: #8a5b13; }
 
 .admin-shell { min-height: 100vh; }
 .topbar { position: fixed; z-index: 50; inset: 0 0 auto; height: 60px; display: flex; align-items: center; color: #e5edf2; background: var(--shell-2); border-bottom: 1px solid #4b5d68; box-shadow: 0 1px 5px rgba(16, 29, 38, .2); }
@@ -74,6 +75,7 @@ button svg { flex: 0 0 auto; }
 .top-actions button { position: relative; color: #52cfb0; }
 .top-actions button i { position: absolute; right: 6px; top: 6px; width: 7px; height: 7px; background: #ef5c58; border: 1px solid var(--shell-2); border-radius: 50%; }
 .version-chip { height: 34px; display: grid; place-items: center; min-width: 66px; padding: 0 10px; color: #fff; background: #24343f; border: 1px solid #52636e; border-radius: 4px; font-size: 12px; font-weight: 700; }
+.demo-chip { height: 28px; display: grid; place-items: center; padding: 0 9px; color: #ffe5b4; background: #694b1d; border: 1px solid #9a7335; border-radius: 3px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .mobile-menu { display: none; margin-left: 8px; }
 
 .sidebar { position: fixed; z-index: 45; inset: 60px auto 0 0; width: 92px; display: flex; flex-direction: column; overflow-y: auto; padding: 8px 5px 16px; background: var(--shell); border-right: 1px solid #354650; }
