@@ -39,10 +39,13 @@ npm run dev:collector
 
 ```bash
 npm run build
+npm run build:pages
 npm run test
 ```
 
 `npm run dev:server` 会先编译服务端再启动。服务端代码变化后需要重启。
+
+GitHub Pages 当前使用 `main / root` 时，推送前运行 `npm run build:pages`。该命令生成根 `index.html` 和 `assets/admin.*`；不要直接发布 `admin/index.html`，它是 Vite 源码入口，浏览器无法直接加载其中的 `/src/main.js`。
 
 ## 3. 数据与文件驱动
 

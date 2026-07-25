@@ -67,11 +67,14 @@ npm run dev:collector
 ```bash
 npm run build
 npm run build:admin
+npm run build:pages
 npm run build:server
 npm run test
 ```
 
 `npm run dev:server` 会先编译服务端，再运行 `server/dist/server/src/main.js`。服务端源码变化后要重启该命令。
+
+`npm run build:pages` 会先构建管理端，再把 `admin-dist/index.html` 和资源同步到仓库根目录的 `index.html`、`assets/`，用于 GitHub Pages 的 `main / root` 发布模式。根目录这些文件是管理后台发布产物，不属于原静态工作台。
 
 ## 4. 目录职责
 
@@ -129,6 +132,7 @@ npm run test
 - `shared/`、`collector/server.mjs`。
 - 管理端所需品牌资源和不含业务内容的数据结构示例。
 - `package.json`、`package-lock.json`、`.env.example`、文档。
+- GitHub Pages 使用的根 `index.html` 和 `assets/admin.*` 管理端发布产物。
 
 禁止提交：
 

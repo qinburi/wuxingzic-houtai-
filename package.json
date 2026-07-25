@@ -12,6 +12,7 @@
     "dev:collector": "node collector/server.mjs",
     "start:server": "node --enable-source-maps server/dist/server/src/main.js",
     "build:admin": "vite build --config admin/vite.config.js",
+    "build:pages": "npm run build:admin && node scripts/publish-admin-pages.mjs",
     "build:server": "tsc -p server/tsconfig.json",
     "build": "npm run build:admin && npm run build:server",
     "build:all": "npm run build",
