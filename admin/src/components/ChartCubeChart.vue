@@ -41,7 +41,11 @@ function chartOptions() {
       data: props.data,
       coordinate: { transform: [{ type: "transpose" }] },
       encode: { x: "name", y: "value", color: "name" },
-      scale: { color: { range: props.colors }, y: { nice: true } },
+      scale: {
+        x: { paddingInner: 0.62, paddingOuter: 0.18 },
+        color: { range: props.colors },
+        y: { nice: true }
+      },
       axis: {
         x: { title: false, labelFontSize: 11, labelFill: "#697784", tick: false },
         y: { title: false, labelFontSize: 10, labelFill: "#8a969e", gridStroke: "#edf1f4" }
