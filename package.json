@@ -20,6 +20,7 @@
     "test:server": "tsx --test server/test/*.test.ts"
   },
   "dependencies": {
+    "@antv/g2": "^5.4.8",
     "@lucide/vue": "^1.26.0",
     "@nestjs/common": "^11.1.28",
     "@nestjs/core": "^11.1.28",

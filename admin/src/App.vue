@@ -62,6 +62,8 @@ import {
 import { ASSET_TYPE_LABELS, IP_KIND_LABELS, IP_LEGAL_STATUS_LABELS, PATENT_TYPE_LABELS, REVISION_STATUS_LABELS, SENSITIVITY_LABELS } from "../../shared/contracts.ts";
 import logoUrl from "../../public/assets/brand/hannao-logo-transparent.png";
 import { api, download, getToken, isDemoMode, patch, post, remove, setToken } from "./api.js";
+import ChartCubeChart from "./components/ChartCubeChart.vue";
+import IconFont from "./components/IconFont.vue";
 
 const navItems = [
   { id: "dashboard", label: "工作台", icon: LayoutDashboard },
@@ -160,6 +162,78 @@ const filteredIpAssets = computed(() => ipWorkspace.value.assets.filter((asset) 
   return !keyword || `${asset.title} ${asset.code} ${asset.ipProfile?.applicationNumber || ""} ${asset.ipProfile?.registrationNumber || ""} ${asset.ipProfile?.primaryOwnerName || ""}`.toLowerCase().includes(keyword);
 }));
 const relationTargetAssets = computed(() => assets.value.filter((asset) => ["case", "platform", "software", "saas", "scene", "hardware", "equipment"].includes(asset.type)));
+const dashboardPublishedCount = computed(() => assets.value.filter((asset) => asset.status === "published").length);
+const dashboardPublicCoverage = computed(() => {
+  const published = dashboardPublishedCount.value;
+  return published ? Math.round(assets.value.filter((asset) => asset.status === "published" && asset.channel === "both").length / published * 100) : 0;
+});
+const dashboardRiskCount = computed(() =>
+  reviews.value.filter((item) => item.status === "pending").length
+  + integrations.value.dispatches.filter((item) => ["failed", "retrying"].includes(item.status)).length
+  + ipWorkspace.value.reminders.filter((item) => item.status === "open").length
+  + ipWorkspace.value.migrationIssues.filter((item) => item.status === "pending").length
+);
+const dashboardStatusData = computed(() => {
+  const labels = { published: "已发布", approved: "待发布", reviewing: "审核中", draft: "草稿", rejected: "已驳回", archived: "已归档" };
+  return Object.entries(assets.value.reduce((result, asset) => {
+    result[asset.status] = (result[asset.status] || 0) + 1;
+    return result;
+  }, {})).map(([status, value]) => ({ name: labels[status] || status, value }));
+});
+const dashboardDepartmentData = computed(() => Object.values(assets.value.reduce((result, asset) => {
+  const name = asset.departmentName || "未分配部门";
+  result[name] ||= { name, value: 0 };
+  result[name].value += 1;
+  return result;
+}, {})).sort((left, right) => right.value - left.value).slice(0, 5));
+const dashboardTrendData = computed(() => {
+  const dayMs = 86400000;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today.getTime() - (6 - index) * dayMs);
+    return { key: date.toISOString().slice(0, 10), label: `${date.getMonth() + 1}/${date.getDate()}` };
+  });
+  const series = [
+    { name: "内容维护", kinds: ["operation", "permission"] },
+    { name: "访问下载", kinds: ["portal", "download"] },
+    { name: "系统协同", kinds: ["system", "task"] }
+  ];
+  const rows = days.flatMap((day) => series.map((item) => ({
+    date: day.label,
+    series: item.name,
+    value: logs.value.filter((log) => String(log.createdAt).slice(0, 10) === day.key && item.kinds.includes(log.kind)).length
+  })));
+  if (isDemoMode && rows.filter((row) => row.value > 0).length <= 3) {
+    const demoValues = { "内容维护": [4, 6, 5, 8, 7, 9, 12], "访问下载": [7, 9, 8, 11, 10, 13, 15], "系统协同": [2, 3, 4, 3, 5, 4, 6] };
+    rows.forEach((row, index) => { row.value = demoValues[row.series][Math.floor(index / series.length)]; });
+  }
+  return rows;
+});
+const dashboardRiskItems = computed(() => [
+  { label: "审核积压", value: reviews.value.filter((item) => item.status === "pending").length, unit: "项", note: "等待模块审核人处理", tone: "amber", module: "workflow" },
+  { label: "任务异常", value: integrations.value.dispatches.filter((item) => ["failed", "retrying"].includes(item.status)).length, unit: "项", note: "目标系统创建或重试异常", tone: "red", module: "tasks" },
+  { label: "期限提醒", value: ipWorkspace.value.reminders.filter((item) => item.status === "open").length, unit: "项", note: "专利年费、期限或资料复核", tone: "blue", module: "ip" },
+  { label: "待确认绑定", value: ipWorkspace.value.migrationIssues.filter((item) => item.status === "pending").length, unit: "项", note: "历史知识产权关系待确认", tone: "violet", module: "ip" }
+]);
+const dashboardIpDeadlines = computed(() => ipWorkspace.value.reminders
+  .filter((item) => ["open", "scheduled"].includes(item.status))
+  .sort((left, right) => Date.parse(left.dueDate || left.dueAt || left.remindAt) - Date.parse(right.dueDate || right.dueAt || right.remindAt))
+  .slice(0, 5));
+const dashboardTodos = computed(() => [
+  ...reviews.value.filter((item) => item.status === "pending").map((item) => ({ id: `review-${item.id}`, kind: "内容审核", title: item.assetTitle, owner: item.reviewerName, time: item.submittedAt, priority: "高", status: "待审核", module: "workflow" })),
+  ...ipWorkspace.value.reminders.filter((item) => item.status === "open").map((item) => ({ id: `reminder-${item.id}`, kind: item.type === "annual_fee" ? "专利年费" : item.type === "expiry" ? "期限到期" : "资料复核", title: item.ipAssetTitle || item.title || "知识产权期限事项", owner: item.ownerName || "知识产权负责人", time: item.dueDate || item.dueAt || item.remindAt, priority: "中", status: "待处理", module: "ip" })),
+  ...integrations.value.dispatches.filter((item) => ["failed", "retrying"].includes(item.status)).map((item) => ({ id: `task-${item.id}`, kind: "系统任务", title: `${item.assetTitle} · ${item.systemName}`, owner: "系统管理员", time: item.updatedAt, priority: "高", status: item.status === "failed" ? "人工处理" : "自动重试", module: "tasks" }))
+].sort((left, right) => (left.priority === "高" ? -1 : 1) - (right.priority === "高" ? -1 : 1)).slice(0, 7));
+const dashboardQuickEntries = [
+  { label: "资产中心", note: "维护资产档案", icon: "assets", module: "assets" },
+  { label: "知识产权", note: "专利与软著", icon: "ip", module: "ip" },
+  { label: "审核发布", note: "处理审核队列", icon: "review", module: "workflow" },
+  { label: "展示配置", note: "设置公开字段", icon: "public", module: "display" },
+  { label: "组织权限", note: "达铃与授权", icon: "department", module: "organization" },
+  { label: "系统任务", note: "异常重试处理", icon: "system", module: "tasks" }
+];
+const dashboardChartColors = ["#246bfd", "#14b87a", "#ff8a34", "#ef4f67", "#7357e8", "#31b7d9"];
 
 function notify(message, tone = "success") {
   toast.message = message;
@@ -926,20 +1000,60 @@ onMounted(async () => {
           </div>
         </header>
 
-        <section v-if="activeModule === 'dashboard'" class="dashboard-view">
-          <div class="metric-grid">
-            <button type="button" @click="switchModule('assets')"><span class="blue"><Boxes :size="21" /></span><div><small>资产总数</small><strong>{{ dashboard.metrics.totalAssets || 0 }}</strong><em>全模块在册</em></div></button>
-            <button type="button" @click="switchModule('workflow')"><span class="amber"><Clock3 :size="21" /></span><div><small>待审核</small><strong>{{ dashboard.metrics.pendingReviews || 0 }}</strong><em>需要处理</em></div></button>
-            <button type="button" @click="switchModule('tasks')"><span class="red"><AlertTriangle :size="21" /></span><div><small>任务异常</small><strong>{{ dashboard.metrics.taskFailures || 0 }}</strong><em>待重试处理</em></div></button>
-            <button type="button" @click="switchModule('display')"><span class="green"><ExternalLink :size="21" /></span><div><small>公开资产</small><strong>{{ dashboard.metrics.publicAssets || 0 }}</strong><em>当前发布</em></div></button>
-            <button type="button" @click="switchModule('organization')"><span class="violet"><ShieldCheck :size="21" /></span><div><small>权限复核</small><strong>{{ dashboard.metrics.accessReviews || 0 }}</strong><em>下次半年复核</em></div></button>
-            <button type="button" @click="switchModule('documents')"><span class="gray"><Paperclip :size="21" /></span><div><small>附件资料</small><strong>{{ dashboard.metrics.attachments || 0 }}</strong><em>受控文件</em></div></button>
+        <section v-if="activeModule === 'dashboard'" class="dashboard-view dashboard-cube">
+          <div class="dashboard-overview-bar">
+            <div><b>无形资产治理总览</b><span>资产、知识产权、发布、权限和系统协同的统一运行视图</span></div>
+            <div><span>当前版本</span><b>{{ organization.settings.currentVersion || 'v1.0.3' }}</b><i></i><span>最近组织同步</span><b>{{ formatDate(organization.settings.lastHrSyncAt) }}</b></div>
           </div>
-          <div class="dashboard-layout">
-            <section class="work-panel review-panel"><header><div><h2>待审核内容</h2><span>{{ dashboard.recentReviews.length }} 项</span></div><button type="button" @click="switchModule('workflow')">查看全部<ChevronRight :size="16" /></button></header><div class="review-list"><button v-for="review in dashboard.recentReviews" :key="review.id" type="button" @click="switchModule('workflow')"><span class="asset-type-mark"><FileText :size="18" /></span><div><b>{{ review.assetTitle }}</b><small>{{ review.submitterName }} · {{ formatDate(review.submittedAt) }}</small></div><em>待审核</em></button><div v-if="!dashboard.recentReviews.length" class="empty-row">暂无待审核内容</div></div></section>
-            <section class="work-panel asset-bars"><header><div><h2>资产构成</h2><span>当前在册</span></div></header><div class="bar-list"><div v-for="item in dashboard.typeSummary" :key="item.type"><span>{{ ASSET_TYPE_LABELS[item.type] }}</span><i><b :style="{ width: `${Math.max(8, item.count / Math.max(...dashboard.typeSummary.map(row => row.count)) * 100)}%` }"></b></i><strong>{{ item.count }}</strong></div></div></section>
-            <section class="work-panel task-panel"><header><div><h2>系统任务协同</h2><span>最近创建</span></div><button type="button" @click="switchModule('tasks')">任务中心<ChevronRight :size="16" /></button></header><div class="task-mini-list"><div v-for="task in dashboard.recentTasks" :key="task.id"><span :class="`dot ${statusTone(task.status)}`"></span><div><b>{{ task.assetTitle }}</b><small>{{ task.systemName }} · 第{{ task.attempt }}次</small></div><em :class="`status ${statusTone(task.status)}`">{{ task.status === 'created' ? '已创建' : task.status === 'failed' ? '失败' : '重试中' }}</em></div><div v-if="!dashboard.recentTasks.length" class="empty-row">暂无系统任务</div></div></section>
-            <section class="work-panel log-panel"><header><div><h2>最近操作</h2><span>安全审计</span></div><button type="button" @click="switchModule('logs')">审计中心<ChevronRight :size="16" /></button></header><div class="log-mini-list"><div v-for="log in dashboard.recentLogs" :key="log.id"><span><Activity :size="16" /></span><div><b>{{ log.action }}</b><small>{{ log.actorName }} · {{ log.targetName }}</small></div><time>{{ formatDate(log.createdAt) }}</time></div></div></section>
+
+          <div class="dashboard-metric-grid">
+            <button class="metric-blue" type="button" @click="switchModule('assets')"><span><IconFont name="assets" :size="25" /></span><div><small>资产总数</small><strong>{{ dashboard.metrics.totalAssets || assets.length }}</strong><em>全模块在册</em></div><i>较上次发布稳定</i></button>
+            <button class="metric-green" type="button" @click="switchModule('assets')"><span><IconFont name="publish" :size="25" /></span><div><small>已发布资产</small><strong>{{ dashboardPublishedCount }}</strong><em>可进入消费端</em></div><i>{{ assets.length ? Math.round(dashboardPublishedCount / assets.length * 100) : 0 }}% 在册占比</i></button>
+            <button class="metric-amber" type="button" @click="switchModule('workflow')"><span><IconFont name="review" :size="25" /></span><div><small>待审核内容</small><strong>{{ dashboard.metrics.pendingReviews || 0 }}</strong><em>等待模块评审</em></div><i>{{ reviews.filter(item => item.status === 'approved').length }} 项已通过</i></button>
+            <button class="metric-cyan" type="button" @click="switchModule('display')"><span><IconFont name="public" :size="25" /></span><div><small>公开覆盖率</small><strong>{{ dashboardPublicCoverage }}<sup>%</sup></strong><em>{{ dashboard.metrics.publicAssets || 0 }} 项对外展示</em></div><i>金额与附件逐项控制</i></button>
+            <button class="metric-violet" type="button" @click="switchModule('ip')"><span><IconFont name="ip" :size="25" /></span><div><small>知识产权</small><strong>{{ ipWorkspace.metrics.total || 0 }}</strong><em>{{ ipWorkspace.metrics.patents || 0 }} 专利 / {{ ipWorkspace.metrics.copyrights || 0 }} 软著</em></div><i>{{ ipWorkspace.metrics.obtained || 0 }} 项已获得</i></button>
+            <button class="metric-red" type="button" @click="switchModule('tasks')"><span><IconFont name="risk" :size="25" /></span><div><small>治理待处理</small><strong>{{ dashboardRiskCount }}</strong><em>审核、期限与异常</em></div><i>{{ dashboard.metrics.taskFailures || 0 }} 项系统异常</i></button>
+          </div>
+
+          <div class="dashboard-chart-grid">
+            <section class="dashboard-panel trend-chart-panel">
+              <header><div><IconFont name="trend" :size="18" /><h2>近 7 日资产活跃趋势</h2></div><span>内容维护、访问下载与系统协同</span></header>
+              <ChartCubeChart class="trend-chart" variant="line" :data="dashboardTrendData" :colors="['#246bfd', '#14b87a', '#ff8a34']" />
+            </section>
+            <section class="dashboard-panel status-chart-panel">
+              <header><div><IconFont name="distribution" :size="18" /><h2>资产状态构成</h2></div><span>当前在册</span></header>
+              <div class="donut-layout"><div class="donut-chart-wrap"><ChartCubeChart variant="donut" :data="dashboardStatusData" :colors="dashboardChartColors" /><div><strong>{{ assets.length }}</strong><span>资产总数</span></div></div><div class="chart-legend"><div v-for="(item, index) in dashboardStatusData" :key="item.name"><i :style="{ background: dashboardChartColors[index % dashboardChartColors.length] }"></i><span>{{ item.name }}</span><b>{{ item.value }}</b><em>{{ assets.length ? (item.value / assets.length * 100).toFixed(1) : 0 }}%</em></div></div></div>
+            </section>
+            <section class="dashboard-panel department-chart-panel">
+              <header><div><IconFont name="department" :size="18" /><h2>部门资产贡献</h2></div><span>按负责部门统计</span></header>
+              <ChartCubeChart class="department-chart" variant="bar" :data="dashboardDepartmentData" :colors="dashboardChartColors" />
+            </section>
+          </div>
+
+          <div class="dashboard-governance-grid">
+            <section class="dashboard-panel risk-panel">
+              <header><div><IconFont name="risk" :size="18" /><h2>重点治理风险</h2></div><button type="button" @click="switchModule('tasks')">查看全部<ChevronRight :size="15" /></button></header>
+              <div class="risk-list"><button v-for="item in dashboardRiskItems" :key="item.label" type="button" @click="switchModule(item.module)"><span :class="item.tone"><IconFont :name="item.label === '期限提醒' ? 'ip' : item.label === '待确认绑定' ? 'department' : item.label === '任务异常' ? 'system' : 'review'" :size="18" /></span><div><b>{{ item.label }}</b><small>{{ item.note }}</small></div><strong>{{ item.value }}<em>{{ item.unit }}</em></strong><ChevronRight :size="15" /></button></div>
+            </section>
+            <section class="dashboard-panel deadline-panel">
+              <header><div><IconFont name="ip" :size="18" /><h2>知识产权期限</h2></div><button type="button" @click="switchModule('ip')">期限台账<ChevronRight :size="15" /></button></header>
+              <div class="deadline-list"><div v-for="item in dashboardIpDeadlines" :key="item.id"><span :class="item.status === 'open' ? 'warning' : 'neutral'">{{ item.type === 'annual_fee' ? '年费' : item.type === 'expiry' ? '期限' : '复核' }}</span><div><b>{{ item.ipAssetTitle || item.title || '知识产权事项' }}</b><small>{{ item.ownerName || '待分配负责人' }} · {{ formatDate(item.dueDate || item.dueAt || item.remindAt, false) }}</small></div><em :class="`status ${item.status === 'open' ? 'warning' : 'neutral'}`">{{ item.status === 'open' ? '待处理' : '已计划' }}</em></div><div v-if="!dashboardIpDeadlines.length" class="empty-row compact-row">暂无近期知识产权期限事项</div></div>
+            </section>
+            <section class="dashboard-panel system-health-panel">
+              <header><div><IconFont name="system" :size="18" /><h2>开放系统状态</h2></div><button type="button" @click="switchModule('integrations')">系统开放<ChevronRight :size="15" /></button></header>
+              <div class="system-health-list"><div v-for="system in integrations.systems" :key="system.id"><span><IconFont name="system" :size="18" /></span><div><b>{{ system.name }}</b><small>{{ system.code }} · {{ formatDate(system.lastCheckedAt) }}</small></div><em :class="`status ${statusTone(system.status)}`">{{ system.status === 'active' ? '连接正常' : '需要检查' }}</em></div><div v-if="!integrations.systems.length" class="empty-row compact-row">尚未登记公司系统</div></div>
+            </section>
+          </div>
+
+          <div class="dashboard-bottom-grid">
+            <section class="dashboard-panel todo-panel">
+              <header><div><IconFont name="todo" :size="18" /><h2>待办事项</h2></div><span>按优先级汇总审核、期限和系统任务</span></header>
+              <div class="dashboard-todo-table"><div class="todo-head"><span>事项类型</span><span>事项内容</span><span>负责人</span><span>计划时间</span><span>优先级</span><span>状态</span><span>操作</span></div><div v-for="item in dashboardTodos" :key="item.id"><span>{{ item.kind }}</span><b>{{ item.title }}</b><span>{{ item.owner }}</span><time>{{ formatDate(item.time) }}</time><em :class="item.priority === '高' ? 'high' : 'medium'">{{ item.priority }}</em><span>{{ item.status }}</span><button type="button" @click="switchModule(item.module)">处理</button></div><div v-if="!dashboardTodos.length" class="empty-row compact-row">当前没有待处理事项</div></div>
+            </section>
+            <section class="dashboard-panel quick-panel">
+              <header><div><IconFont name="quick" :size="18" /><h2>快捷入口</h2></div><span>常用维护入口</span></header>
+              <div class="quick-entry-grid"><button v-for="item in dashboardQuickEntries" :key="item.label" type="button" @click="switchModule(item.module)"><span><IconFont :name="item.icon" :size="22" /></span><b>{{ item.label }}</b><small>{{ item.note }}</small></button></div>
+            </section>
           </div>
         </section>
 
