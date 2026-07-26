@@ -82,6 +82,7 @@ function chartOptions() {
         type: "point",
         data: props.data,
         encode: { x: "date", y: "value", color: "series" },
+        tooltip: false,
         style: { r: 3, stroke: "#ffffff", lineWidth: 1.5 },
         labels: [{
           text: "value",
