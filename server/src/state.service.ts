@@ -48,6 +48,7 @@ export class StateService implements OnModuleInit {
     this.state.ipRelations ||= [];
     this.state.ipReminders ||= [];
     this.state.ipMigrationIssues ||= [];
+    this.state.maintenanceExpenses ||= seed.maintenanceExpenses;
     this.state.settings.displayModules ||= seed.settings.displayModules;
     this.state.settings.ipReminderRules ||= seed.settings.ipReminderRules;
     this.state.settings.ipDefaultSystemIds ||= seed.settings.ipDefaultSystemIds;
@@ -589,22 +590,27 @@ export class StateService implements OnModuleInit {
     return { issue, relation };
   }
 
-  dashboard() {
-    const assets = this.state.assets.filter((asset) => asset.status !== "archived");
+  dashboard(actor?: UserRecord) {
+    const companyView = !actor || this.isAdmin(actor) || actor.roleCodes.some((code) => ["ASSET_AUDITOR", "SYSTEM_ADMIN", "ASSET_PUBLISHER"].includes(code));
+    const assets = this.state.assets.filter((asset) => asset.status !== "archived" && (companyView || canReadAsset(asset, actor!) || this.canMaintain(asset, actor!)));
     const publishedAssets = assets.filter((asset) => asset.status === "published");
     const publicAssets = publishedAssets.filter((asset) => asset.channel === "both" && !["confidential", "restricted"].includes(asset.sensitivity));
     const ipAssets = assets.filter((asset) => asset.type === "ip" && asset.ipProfile);
-    const pendingReviews = this.state.reviews.filter((review) => review.status === "pending");
-    const taskFailures = this.state.taskDispatches.filter((task) => task.status === "failed" || task.status === "retrying");
-    const openReminders = this.state.ipReminders.filter((reminder) => reminder.status === "open");
-    const governancePending = pendingReviews.length + taskFailures.length + openReminders.length;
+    const visibleAssetIds = new Set(assets.map((asset) => asset.id));
+    const pendingReviews = this.state.reviews.filter((review) => review.status === "pending" && visibleAssetIds.has(review.assetId) && (companyView || review.reviewerId === actor?.id || review.submitterId === actor?.id));
+    const taskFailures = this.state.taskDispatches.filter((task) => ["failed", "retrying"].includes(task.status) && visibleAssetIds.has(task.assetId));
+    const openReminders = this.state.ipReminders.filter((reminder) => reminder.status === "open" && visibleAssetIds.has(reminder.ipAssetId) && (companyView || reminder.ownerId === actor?.id || reminder.collaboratorIds.includes(actor?.id || "")));
+    const now = Date.now();
+    const routeByType: Record<string, string> = {
+      case: "assets.case", industry: "assets.industry", platform: "assets.platform", software: "assets.software", saas: "assets.saas", scene: "assets.scene",
+      hardware: "assets.hardware", equipment: "assets.equipment", document: "documents.overview", ip: "ip.overview", governance: "governance.overview"
+    };
 
     const statusSummary = [
       { status: "reviewing", label: "审核中", count: assets.filter((asset) => ["reviewing", "approved"].includes(asset.status)).length, color: "#2f73f6" },
       { status: "published", label: "已发布", count: publishedAssets.length, color: "#26b982" },
       { status: "draft", label: "草稿", count: assets.filter((asset) => ["draft", "rejected"].includes(asset.status)).length, color: "#ff8a3d" }
     ];
-
     const dateKey = (value: string | Date) => {
       const date = new Date(value);
       return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -624,12 +630,52 @@ export class StateService implements OnModuleInit {
       if (["system", "task"].includes(log.kind)) row.systemCollaboration += 1;
     });
 
+    const usageKinds = new Set<AuditRecord["kind"]>(["portal", "download", "system"]);
+    const usageCutoff = now - 30 * dayMs;
+    const idleCutoff = now - 90 * dayMs;
+    const usageByAsset = new Map<string, { views: number; downloads: number; systemCalls: number; total: number; lastUsedAt?: string }>();
+    this.state.logs.forEach((log) => {
+      if (log.result !== "success" || !usageKinds.has(log.kind) || !visibleAssetIds.has(log.targetId)) return;
+      const current = usageByAsset.get(log.targetId) || { views: 0, downloads: 0, systemCalls: 0, total: 0 };
+      if (!current.lastUsedAt || Date.parse(log.createdAt) > Date.parse(current.lastUsedAt)) current.lastUsedAt = log.createdAt;
+      if (Date.parse(log.createdAt) >= usageCutoff) {
+        if (log.kind === "portal") current.views += 1;
+        if (log.kind === "download") current.downloads += 1;
+        if (log.kind === "system") current.systemCalls += 1;
+        current.total += 1;
+      }
+      usageByAsset.set(log.targetId, current);
+    });
+    const usageEligibleAssets = assets.filter((asset) => !["ip", "governance"].includes(asset.type));
+    const popularAssets = usageEligibleAssets.map((asset) => ({
+      id: asset.id,
+      title: asset.title,
+      type: asset.type,
+      typeLabel: asset.category,
+      ownerName: asset.ownerName,
+      routeId: routeByType[asset.type] || "assets.overview",
+      ...(usageByAsset.get(asset.id) || { views: 0, downloads: 0, systemCalls: 0, total: 0 })
+    })).filter((item) => item.total > 0).sort((left, right) => right.total - left.total).slice(0, 5);
+    const activeAssetIds = new Set<string>();
+    this.state.logs.forEach((log) => {
+      if (log.result === "success" && usageKinds.has(log.kind) && visibleAssetIds.has(log.targetId) && Date.parse(log.createdAt) >= usageCutoff) activeAssetIds.add(log.targetId);
+    });
+    const idleAssets = usageEligibleAssets.filter((asset) => {
+      const lastUsedAt = usageByAsset.get(asset.id)?.lastUsedAt;
+      return !lastUsedAt || Date.parse(lastUsedAt) < idleCutoff;
+    }).map((asset) => {
+      const lastUsedAt = usageByAsset.get(asset.id)?.lastUsedAt;
+      return {
+        id: asset.id, title: asset.title, type: asset.type, typeLabel: asset.category, ownerName: asset.ownerName, departmentName: asset.departmentName, lastUsedAt,
+        idleDays: lastUsedAt ? Math.floor((now - Date.parse(lastUsedAt)) / dayMs) : null,
+        routeId: routeByType[asset.type] || "assets.overview"
+      };
+    }).sort((left, right) => Number(right.typeLabel === "产品设计") - Number(left.typeLabel === "产品设计") || (right.idleDays ?? 9999) - (left.idleDays ?? 9999));
+
     const departmentContributions = Object.entries(assets.reduce<Record<string, number>>((result, asset) => {
       result[asset.departmentName] = (result[asset.departmentName] || 0) + 1;
       return result;
     }, {})).map(([department, count]) => ({ department, count })).sort((left, right) => right.count - left.count);
-
-    const now = Date.now();
     const ipDeadlines = ipAssets.flatMap((asset) => {
       const profile = asset.ipProfile!;
       return [
@@ -637,10 +683,8 @@ export class StateService implements OnModuleInit {
         profile.nextReviewAt ? { id: `${asset.id}-review`, assetId: asset.id, title: asset.title, type: "review", typeLabel: "资料复核", dueDate: profile.nextReviewAt, ownerName: profile.primaryOwnerName } : undefined,
         profile.expiresAt ? { id: `${asset.id}-expiry`, assetId: asset.id, title: asset.title, type: "expiry", typeLabel: "期限", dueDate: profile.expiresAt, ownerName: profile.primaryOwnerName } : undefined
       ].filter(Boolean);
-    }).map((item) => ({
-      ...item!,
-      daysRemaining: Math.ceil((Date.parse(item!.dueDate) - now) / dayMs)
-    })).filter((item) => Number.isFinite(item.daysRemaining)).sort((left, right) => left.daysRemaining - right.daysRemaining).slice(0, 6);
+    }).map((item) => ({ ...item!, daysRemaining: Math.ceil((Date.parse(item!.dueDate) - now) / dayMs) }))
+      .filter((item) => Number.isFinite(item.daysRemaining)).sort((left, right) => left.daysRemaining - right.daysRemaining).slice(0, 6);
 
     const missingIpDocuments = ipAssets.filter((asset) => asset.attachments.length === 0).length;
     const expiringIp = ipDeadlines.filter((item) => item.daysRemaining >= 0 && item.daysRemaining <= 180).length;
@@ -651,14 +695,68 @@ export class StateService implements OnModuleInit {
       { id: "task-failures", title: "系统协同异常", detail: `${taskFailures.length} 项任务等待重试或人工处理`, count: taskFailures.length, tone: taskFailures.length ? "danger" : "success", routeId: "tasks.exceptions" }
     ];
 
-    const systemStatuses = this.state.systems.map((system) => ({
-      id: system.id,
-      name: system.name,
-      code: system.code,
-      status: system.status,
-      lastCheckedAt: system.lastCheckedAt,
-      taskFailures: taskFailures.filter((task) => task.systemId === system.id).length
-    }));
+    const staleThreshold = (asset: AssetRecord) => ["platform", "software", "saas"].includes(asset.type) ? 90 : 180;
+    const staleAssets = usageEligibleAssets.map((asset) => ({ asset, days: Math.floor((now - Date.parse(asset.updatedAt)) / dayMs) })).filter(({ asset, days }) => days >= staleThreshold(asset));
+    const maintenanceWarnings = [
+      ...staleAssets.map(({ asset, days }) => ({
+        id: `stale-${asset.id}`, kind: "stale", title: asset.title, detail: `${days} 天未更新，${asset.category}建议由 ${asset.ownerName} 复核版本与展示内容`,
+        ownerName: asset.ownerName, dueDate: asset.updatedAt, severity: days >= 180 ? "danger" : "warning", days, routeId: routeByType[asset.type] || "assets.overview"
+      })),
+      ...idleAssets.map((asset) => ({
+        id: `idle-${asset.id}`, kind: "idle", title: asset.title, detail: asset.lastUsedAt ? `已连续 ${asset.idleDays} 天无访问、下载或系统调用` : "尚无访问、下载或系统调用记录，建议评估归档或重新推广",
+        ownerName: asset.ownerName, dueDate: asset.lastUsedAt, severity: "warning", days: asset.idleDays ?? 9999, routeId: asset.routeId
+      })),
+      ...assets.filter((asset) => asset.attachments.length === 0).map((asset) => ({
+        id: `missing-file-${asset.id}`, kind: "missing_file", title: asset.title, detail: `缺少支撑材料，负责人 ${asset.ownerName} 需补充可验证附件`,
+        ownerName: asset.ownerName, dueDate: asset.updatedAt, severity: "danger", days: 9998, routeId: routeByType[asset.type] || "assets.overview"
+      }))
+    ].sort((left, right) => left.severity === right.severity ? right.days - left.days : left.severity === "danger" ? -1 : 1);
+    const featuredWarnings = [
+      ...maintenanceWarnings.filter((item) => item.kind === "idle").slice(0, 3),
+      ...maintenanceWarnings.filter((item) => item.kind === "stale").slice(0, 3),
+      ...maintenanceWarnings.filter((item) => item.kind === "missing_file").slice(0, 2)
+    ];
+
+    const pendingActions = [
+      ...pendingReviews.map((review) => ({ id: `review-${review.id}`, type: "review", title: review.assetTitle, detail: `由 ${review.submitterName} 提交，等待 ${review.reviewerName} 审核`, ownerName: review.reviewerName, dueDate: new Date(Date.parse(review.submittedAt) + 3 * dayMs).toISOString(), priority: "high", routeId: "workflow.reviews" })),
+      ...openReminders.map((reminder) => ({ id: `reminder-${reminder.id}`, type: "ip", title: reminder.ipAssetTitle, detail: reminder.type === "annual_fee" ? "专利年费待处理" : reminder.type === "expiry" ? "知识产权期限待处理" : "知识产权资料待复核", ownerName: reminder.ownerName, dueDate: reminder.dueDate, priority: Date.parse(reminder.dueDate) - now <= 30 * dayMs ? "urgent" : "high", routeId: "ip.deadlines" })),
+      ...taskFailures.map((task) => ({ id: `task-${task.id}`, type: "task", title: task.assetTitle, detail: `${task.systemName}任务${task.status === "retrying" ? "正在重试" : "创建失败"}，已尝试 ${task.attempt} 次`, ownerName: "系统管理员", dueDate: task.nextRetryAt || task.updatedAt, priority: "urgent", routeId: "tasks.exceptions" }))
+    ].sort((left, right) => left.priority === right.priority ? Date.parse(left.dueDate) - Date.parse(right.dueDate) : left.priority === "urgent" ? -1 : 1);
+
+    const currentYear = String(new Date().getFullYear());
+    const visibleExpenses = this.state.maintenanceExpenses.filter((expense) => companyView || expense.ownerId === actor?.id || expense.departmentId === actor?.departmentId);
+    const yearExpenses = visibleExpenses.filter((expense) => expense.period.startsWith(currentYear));
+    const expenseCategories = Object.entries(yearExpenses.reduce<Record<string, number>>((result, expense) => {
+      result[expense.category] = (result[expense.category] || 0) + expense.amount;
+      return result;
+    }, {})).map(([category, amount]) => ({
+      category,
+      label: ({ telecom: "通信电话", network: "网络专线", cloud: "云服务", ip_application: "专利软著申请", ip_annual_fee: "知识产权年费", software_subscription: "软件订阅", other: "其他" } as Record<string, string>)[category] || category,
+      amount
+    })).sort((left, right) => right.amount - left.amount);
+    const expenseTrend = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date();
+      date.setDate(1);
+      date.setMonth(date.getMonth() - (5 - index));
+      const period = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+      const rows = visibleExpenses.filter((expense) => expense.period === period);
+      return { period, label: `${date.getMonth() + 1}月`, actual: rows.reduce((sum, expense) => sum + expense.amount, 0), budget: rows.reduce((sum, expense) => sum + expense.budgetAmount, 0) };
+    });
+    const expenseActual = yearExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+    const expenseBudget = yearExpenses.reduce((sum, expense) => sum + expense.budgetAmount, 0);
+    const upcomingExpenses = visibleExpenses.filter((expense) => ["planned", "pending", "overdue"].includes(expense.status) && Date.parse(expense.dueDate) <= now + 60 * dayMs)
+      .sort((left, right) => Date.parse(left.dueDate) - Date.parse(right.dueDate)).slice(0, 5);
+    const ipComposition = [
+      { name: "专利", value: ipAssets.filter((asset) => asset.ipProfile?.kind === "patent").length, routeId: "ip.patents" },
+      { name: "软件著作权", value: ipAssets.filter((asset) => asset.ipProfile?.kind === "software_copyright").length, routeId: "ip.copyrights" },
+      { name: "其他无形资产", value: Math.max(0, assets.length - ipAssets.length), routeId: "assets.overview" }
+    ];
+    const freshnessSummary = [
+      { name: "90天内更新", value: assets.filter((asset) => now - Date.parse(asset.updatedAt) <= 90 * dayMs).length },
+      { name: "91-180天", value: assets.filter((asset) => now - Date.parse(asset.updatedAt) > 90 * dayMs && now - Date.parse(asset.updatedAt) <= 180 * dayMs).length },
+      { name: "超过180天", value: assets.filter((asset) => now - Date.parse(asset.updatedAt) > 180 * dayMs).length }
+    ];
+    const systemStatuses = this.state.systems.map((system) => ({ ...system, taskFailures: taskFailures.filter((task) => task.systemId === system.id).length }));
 
     return {
       metrics: {
@@ -671,19 +769,39 @@ export class StateService implements OnModuleInit {
         ipAssets: ipAssets.length,
         patents: ipAssets.filter((asset) => asset.ipProfile?.kind === "patent").length,
         copyrights: ipAssets.filter((asset) => asset.ipProfile?.kind === "software_copyright").length,
-        governancePending,
+        governancePending: pendingActions.length + maintenanceWarnings.length,
+        activeAssets30d: activeAssetIds.size,
+        idleAssets90d: idleAssets.length,
+        usageEvents30d: Array.from(usageByAsset.values()).reduce((sum, item) => sum + item.total, 0),
+        updateWarnings: maintenanceWarnings.length,
+        pendingActions: pendingActions.length,
+        maintenanceCostYtd: expenseActual,
+        maintenanceBudgetYtd: expenseBudget,
         approvedReviews: this.state.reviews.filter((review) => review.status === "approved").length,
         accessReviews: this.state.users.filter((user) => user.status === "active").length,
         attachments: assets.reduce((sum, asset) => sum + asset.attachments.length, 0)
       },
       currentVersion: this.state.settings.currentVersion,
       lastHrSyncAt: this.state.settings.lastHrSyncAt,
+      scopeLabel: companyView ? "全公司" : actor?.departmentName || "我的负责范围",
       activityTrend,
       statusSummary,
       departmentContributions,
       governanceRisks,
       ipDeadlines,
       systemStatuses,
+      pendingActions: pendingActions.slice(0, 8),
+      popularAssets,
+      idleAssets: idleAssets.slice(0, 8),
+      maintenanceWarnings: featuredWarnings,
+      ipComposition,
+      freshnessSummary,
+      expenseSummary: { ytdActual: expenseActual, ytdBudget: expenseBudget, budgetRate: expenseBudget ? Math.round(expenseActual / expenseBudget * 100) : 0, categories: expenseCategories, trend: expenseTrend, upcoming: upcomingExpenses },
+      managementTips: [
+        idleAssets.length ? `${idleAssets.length} 项资产连续 90 天无使用记录，优先复核产品设计、方案和资料是否仍有复用价值。` : "当前资产均有近期使用记录。",
+        staleAssets.length ? `${staleAssets.length} 项资产超过更新周期，建议按负责人发起版本和展示内容复核。` : "当前资产更新频率符合维护周期。",
+        upcomingExpenses.length ? `${upcomingExpenses.length} 项公共维护费用将在 60 天内到期，需确认预算、供应商和续费必要性。` : "近期没有待支付公共维护费用。"
+      ],
       recentReviews: this.state.reviews.slice(0, 6),
       recentLogs: this.state.logs.slice(0, 8),
       recentTasks: this.state.taskDispatches.slice(0, 6),

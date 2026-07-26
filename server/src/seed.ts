@@ -11,6 +11,7 @@ import type {
   IpRelationRecord,
   IpReminderRecord,
   IpReminderType,
+  MaintenanceExpenseRecord,
   PortalDataset,
   PublicDownloadRegistration,
   ReviewRecord,
@@ -92,6 +93,7 @@ export interface AppState {
   ipRelations: IpRelationRecord[];
   ipReminders: IpReminderRecord[];
   ipMigrationIssues: IpMigrationIssue[];
+  maintenanceExpenses: MaintenanceExpenseRecord[];
   reviews: ReviewRecord[];
   systems: ExternalSystemRecord[];
   taskTemplates: TaskTemplateRecord[];
@@ -115,6 +117,13 @@ export interface AppState {
 }
 
 const now = () => new Date().toISOString();
+const daysFromNow = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString();
+const monthKey = (offset: number) => {
+  const date = new Date();
+  date.setDate(1);
+  date.setMonth(date.getMonth() + offset);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+};
 
 export function hashPassword(password: string, salt = "hannao-local-seed") {
   return `${salt}:${scryptSync(password, salt, 64).toString("hex")}`;
@@ -167,6 +176,7 @@ const assetGroups: Array<[AssetType, string, string[]]> = [
   ["hardware", "智能硬件", ["工位机", "手持机", "打印机", "广告机", "取餐机", "RFID", "边缘计算机", "硬件扩展"]],
   ["equipment", "智能设备", ["无源相控阵管控装置", "AGV", "提升机", "穿梭车", "机械臂", "立体库", "视觉检测设备", "工业相机", "电子看板", "装备扩展"]],
   ["document", "资料资产", ["示例公司介绍", "示例数字工厂方案", "示例资料归档制度", "示例SaaS服务协议", "示例宣传资料", "示例项目验收模板"]],
+  ["document", "产品设计", ["示例移动排产产品设计", "示例工业软件交互规范"]],
   ["ip", "知识产权", ["示例生产数据处理方法", "示例设备异常预警装置", "示例仓储调度方法", "示例ERP管理软件", "示例MES执行软件", "示例品牌商标"]],
   ["governance", "治理资产", ["示例续费事项", "示例低利用率清单", "示例闲置设备清单", "示例移动排产设计", "示例访问审计策略"]]
 ];
@@ -262,8 +272,8 @@ function makeAsset(type: AssetType, category: string, title: string, index: numb
     systemIds: index % 6 === 0 ? ["sys-erp", "sys-mes"] : index % 4 === 0 ? ["sys-daling"] : [],
     ipProfile: type === "ip" ? makeIpProfile(title, owner) : undefined,
     lockVersion: 1,
-    createdAt: now(),
-    updatedAt: now()
+    createdAt: daysFromNow(-(260 + index * 3)),
+    updatedAt: daysFromNow(-([12, 28, 46, 75, 104, 138, 186, 224][index % 8]))
   };
 }
 
@@ -301,31 +311,94 @@ const reviews: ReviewRecord[] = assets.filter((asset) => asset.status === "revie
   submittedAt: new Date(Date.now() - (index + 1) * 86400000).toISOString()
 }));
 
-const logs: AuditRecord[] = [
-  ["login", "登录成功", "工作台", "success", "演示管理员"],
-  ["operation", "更新资产", "示例制造案例", "success", "演示维护员甲"],
-  ["permission", "重算部门权限", "示例技术组", "success", "系统任务"],
-  ["portal", "查看资产详情", "示例工业平台", "success", "演示维护员乙"],
-  ["download", "下载资料", "示例产品说明.pdf", "success", "演示维护员丙"],
-  ["system", "系统调用", "ERP资产接口", "success", "汉脑ERP"],
-  ["task", "创建项目任务", "WMS仓储资产任务", "success", "系统任务"]
-].map((item, index) => ({
-  id: `log-seed-${index + 1}`,
-  kind: item[0] as AuditRecord["kind"],
-  actorId: `seed-${index}`,
-  actorName: item[4],
-  departmentName: "系统与资产治理",
-  action: item[1],
-  targetType: item[0],
-  targetId: `target-${index}`,
-  targetName: item[2],
-  result: item[3] as AuditRecord["result"],
+const usageProfiles = [
+  ["ERP", 32, 9, 18],
+  ["MES", 27, 7, 16],
+  ["示例工业联网平台", 24, 5, 12],
+  ["示例数字工厂方案", 18, 11, 3],
+  ["WMS", 16, 4, 9],
+  ["达铃", 13, 2, 8]
+] as const;
+
+const usageLogs: AuditRecord[] = usageProfiles.flatMap(([title, views, downloads, calls], profileIndex) => {
+  const asset = assets.find((item) => item.title === title)!;
+  const createLogs = (kind: "portal" | "download" | "system", count: number, offset: number) => Array.from({ length: count }, (_, index) => ({
+    id: `log-usage-${profileIndex}-${kind}-${index}`,
+    kind,
+    actorId: kind === "system" ? "system-client" : users[(profileIndex + index) % users.length].id,
+    actorName: kind === "system" ? "业务系统" : users[(profileIndex + index) % users.length].name,
+    departmentName: asset.departmentName,
+    action: kind === "portal" ? "查看资产详情" : kind === "download" ? "下载资产资料" : "系统调用资产",
+    targetType: "asset",
+    targetId: asset.id,
+    targetName: asset.title,
+    result: "success" as const,
     ip: "127.0.0.1",
-  device: "Chrome / macOS",
-  requestId: randomUUID(),
-  detail: "初始化审计记录",
-  createdAt: new Date(Date.now() - index * 3600000).toISOString()
-}));
+    device: kind === "system" ? "connector" : "Chrome / macOS",
+    requestId: randomUUID(),
+    detail: "初始化使用记录",
+    createdAt: daysFromNow(-((index * 3 + offset + profileIndex) % 28))
+  }));
+  return [...createLogs("portal", views, 0), ...createLogs("download", downloads, 1), ...createLogs("system", calls, 2)];
+});
+
+const logs: AuditRecord[] = [
+  {
+    id: "log-seed-login",
+    kind: "login",
+    actorId: users[0].id,
+    actorName: users[0].name,
+    departmentName: users[0].departmentName,
+    action: "登录成功",
+    targetType: "session",
+    targetId: "admin",
+    targetName: "无形资产管理后台",
+    result: "success",
+    ip: "127.0.0.1",
+    device: "Chrome / macOS",
+    requestId: randomUUID(),
+    detail: "初始化审计记录",
+    createdAt: now()
+  },
+  ...usageLogs
+];
+
+const expenseCategories: Array<[MaintenanceExpenseRecord["category"], string, number, number]> = [
+  ["telecom", "企业通信与电话服务", 4600, 5000],
+  ["network", "办公与机房网络专线", 12800, 14000],
+  ["cloud", "云服务器与对象存储", 28600, 30000],
+  ["software_subscription", "软件订阅与域名证书", 9200, 10000],
+  ["ip_application", "专利与软著申请服务", 18000, 22000],
+  ["ip_annual_fee", "专利年费与资料复核", 7600, 9000]
+];
+
+const maintenanceExpenses: MaintenanceExpenseRecord[] = Array.from({ length: 6 }, (_, monthIndex) => expenseCategories.map(([category, name, baseAmount, budgetAmount], categoryIndex) => {
+  const period = monthKey(monthIndex - 5);
+  const owner = users[(categoryIndex + 1) % users.length];
+  const amount = baseAmount + monthIndex * (categoryIndex + 1) * 180;
+  return {
+    id: `expense-${period}-${category}`,
+    name,
+    category,
+    period,
+    amount,
+    budgetAmount,
+    vendor: ["中国电信", "企业网络服务商", "云资源服务商", "企业软件服务商", "知识产权代理机构", "知识产权管理机构"][categoryIndex],
+    dueDate: monthIndex === 5 ? daysFromNow(categoryIndex === 4 ? 12 : categoryIndex === 2 ? 25 : 40 + categoryIndex) : `${period}-25T00:00:00.000Z`,
+    ownerId: owner.id,
+    ownerName: owner.name,
+    departmentId: owner.departmentId,
+    departmentName: owner.departmentName,
+    status: (monthIndex === 5 && categoryIndex < 2 ? "pending" : "paid") as MaintenanceExpenseRecord["status"],
+    source: (categoryIndex % 2 === 0 ? "kingdee" : "manual") as MaintenanceExpenseRecord["source"],
+    kingdeeAccountCode: `6602.${String(categoryIndex + 1).padStart(2, "0")}`,
+    kingdeeVoucherNo: monthIndex === 5 && categoryIndex < 2 ? undefined : `KD-${period.replace("-", "")}-${categoryIndex + 1}`,
+    relatedAssetIds: category === "cloud" ? assets.filter((item) => ["platform", "saas"].includes(item.type)).slice(0, 4).map((item) => item.id) : category.startsWith("ip_") ? assets.filter((item) => item.type === "ip").slice(0, 3).map((item) => item.id) : [],
+    notes: "演示费用，可由金蝶科目与凭证同步替换。",
+    createdAt: `${period}-01T00:00:00.000Z`,
+    updatedAt: now()
+  };
+})).flat();
 
 export function createSeedState(): AppState {
   const state: AppState = {
@@ -343,6 +416,7 @@ export function createSeedState(): AppState {
     ipRelations: [],
     ipReminders: [],
     ipMigrationIssues: [],
+    maintenanceExpenses,
     reviews,
     systems,
     taskTemplates,

@@ -43,6 +43,23 @@ test("治理工作台返回完整指标和可视化数据", async () => {
   assert.equal(dashboard.systemStatuses.length, service.snapshot().systems.length);
   assert.equal(dashboard.metrics.ipAssets, dashboard.metrics.patents + dashboard.metrics.copyrights);
   assert.ok(dashboard.metrics.publicCoverage >= 0 && dashboard.metrics.publicCoverage <= 100);
+  assert.equal(dashboard.popularAssets.length, 5);
+  assert.ok(dashboard.popularAssets.every((item) => item.total === item.views + item.downloads + item.systemCalls));
+  assert.ok(dashboard.idleAssets.length > 0);
+  assert.ok(dashboard.maintenanceWarnings.some((item) => item.kind === "idle"));
+  assert.equal(dashboard.ipComposition.reduce((sum, item) => sum + item.value, 0), dashboard.metrics.totalAssets);
+  assert.ok(dashboard.expenseSummary.ytdActual > 0);
+  assert.equal(dashboard.expenseSummary.trend.length, 6);
+  assert.ok(dashboard.managementTips.length >= 3);
+});
+
+test("治理工作台按登录人范围返回待办和费用", async () => {
+  const service = await createService();
+  const editor = service.userById("user-demo-editor-a")!;
+  const dashboard = service.dashboard(editor);
+  assert.equal(dashboard.scopeLabel, editor.departmentName);
+  assert.ok(dashboard.pendingActions.every((item) => item.ownerName === editor.name || item.type === "task" || item.detail.includes(editor.name)));
+  assert.ok(dashboard.expenseSummary.ytdActual <= service.dashboard().expenseSummary.ytdActual);
 });
 
 test("乐观锁阻止旧版本覆盖资产", async () => {

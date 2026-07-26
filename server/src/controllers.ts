@@ -59,7 +59,7 @@ export class AuthController {
 export class DashboardController {
   constructor(private readonly state: StateService) {}
   @Get()
-  get() { return this.state.dashboard(); }
+  get(@Req() request: any) { return this.state.dashboard(actor(request)); }
 }
 
 @UseGuards(AuthGuard)

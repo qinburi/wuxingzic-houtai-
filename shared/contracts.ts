@@ -82,6 +82,8 @@ export type IpRelationType = "core" | "supporting" | "derived";
 export type IpRelationStatus = "draft" | "reviewing" | "approved" | "published" | "rejected" | "archived";
 export type IpReminderType = "expiry" | "annual_fee" | "document_review" | "owner_handover";
 export type IpFileVisibility = "internal" | "public";
+export type MaintenanceExpenseCategory = "telecom" | "network" | "cloud" | "ip_application" | "ip_annual_fee" | "software_subscription" | "other";
+export type MaintenanceExpenseStatus = "planned" | "pending" | "paid" | "overdue";
 
 export interface AttachmentRecord {
   id: string;
@@ -214,6 +216,29 @@ export interface AudienceTemplate {
   subjectId: string;
   subjectName: string;
   actions: AccessAction[];
+}
+
+export interface MaintenanceExpenseRecord {
+  id: string;
+  name: string;
+  category: MaintenanceExpenseCategory;
+  period: string;
+  amount: number;
+  budgetAmount: number;
+  vendor: string;
+  dueDate: string;
+  ownerId: string;
+  ownerName: string;
+  departmentId: string;
+  departmentName: string;
+  status: MaintenanceExpenseStatus;
+  source: "manual" | "kingdee";
+  kingdeeAccountCode?: string;
+  kingdeeVoucherNo?: string;
+  relatedAssetIds: string[];
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AssetRecord {

@@ -1,7 +1,9 @@
-const STORAGE_KEY = "hannao_admin_demo_state_v1";
+const STORAGE_KEY = "hannao_admin_demo_state_v3";
 const TOKEN_KEY = "hannao_admin_token";
 const DEMO_TOKEN = "hannao-pages-demo-session";
 const DEMO_DATE = "2026-07-25T06:30:00.000Z";
+const DAY_MS = 86400000;
+const demoDate = (daysFromBase) => new Date(Date.parse(DEMO_DATE) + daysFromBase * DAY_MS).toISOString();
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -34,6 +36,7 @@ const groups = [
   ["hardware", "智能硬件", ["工业工位机", "手持终端", "边缘计算机"]],
   ["equipment", "智能设备", ["AGV调度设备", "视觉检测设备"]],
   ["document", "资料资产", ["公司介绍", "数字工厂解决方案", "项目验收模板"]],
+  ["document", "产品设计", ["移动排产产品设计", "工业软件交互规范"]],
   ["governance", "治理资产", ["年度续费事项", "低利用率资产清单"]]
 ];
 
@@ -59,7 +62,8 @@ function makeAsset(type, category, title, index) {
     publicFields: ["summary", "version", "attachments", ...(index % 6 === 0 ? ["amount"] : [])],
     featured: index < 8, sortOrder: index + 1, attachments: [makeAttachment(id, title)],
     audienceTemplates: [{ id: `aud-${id}`, subjectType: "department", subjectId: owner.departmentId, subjectName: owner.departmentName, actions: ["view", "preview", "download"] }],
-    systemIds: index % 6 === 0 ? ["sys-erp", "sys-mes"] : [], lockVersion: 1, createdAt: DEMO_DATE, updatedAt: DEMO_DATE
+    systemIds: index % 6 === 0 ? ["sys-erp", "sys-mes"] : [], lockVersion: 1,
+    createdAt: demoDate(-(260 + index * 3)), updatedAt: demoDate(-([12, 28, 46, 75, 104, 138, 186, 224][index % 8]))
   };
 }
 
@@ -115,18 +119,49 @@ function initialState() {
     { id: "sys-daling", name: "达铃协同", code: "DALING", status: "warning", baseUrl: "https://daling.internal.example", taskTemplateId: "tpl-daling", credentialHint: "client_daling_****08", lastCheckedAt: DEMO_DATE }
   ];
   const templates = systems.map((system) => ({ id: system.taskTemplateId, name: `${system.name}资产评审任务`, systemId: system.id, taskType: "PROJECT_ASSET", projectCode: `${system.code}-ASSET`, titleTemplate: "[无形资产] {{asset.title}}", ownerField: "asset.ownerId", version: 1, enabled: true }));
-  const logs = [
-    ["login", "登录成功", "管理后台", "演示管理员"], ["operation", "更新资产", "服装数字工厂案例", "演示维护员"],
-    ["permission", "重算部门权限", "产品中心", "系统任务"], ["portal", "查看资产详情", "工业联网平台", "演示维护员"],
-    ["download", "下载资料", "数字工厂解决方案.pdf", "演示管理员"], ["system", "系统调用", "ERP资产接口", "汉脑ERP"],
-    ["task", "创建项目任务", "WMS仓储资产任务", "系统任务"]
-  ].map((item, logIndex) => ({ id: `log-${logIndex + 1}`, kind: item[0], actorId: `actor-${logIndex}`, actorName: item[3], departmentName: "系统与资产治理", action: item[1], targetType: item[0], targetId: `target-${logIndex}`, targetName: item[2], result: "success", ip: "匿名演示", device: "GitHub Pages", requestId: `DEMO-${String(logIndex + 1).padStart(5, "0")}`, detail: "演示环境初始化记录", createdAt: new Date(Date.parse(DEMO_DATE) - logIndex * 3600000).toISOString() }));
+  const usageProfiles = [
+    ["ERP管理系统", 32, 9, 18], ["MES执行系统", 27, 7, 16], ["工业联网平台", 24, 5, 12],
+    ["数字工厂解决方案", 18, 11, 3], ["WMS仓储系统", 16, 4, 9], ["达铃协同", 13, 2, 8]
+  ];
+  const usageLogs = usageProfiles.flatMap(([title, views, downloads, calls], profileIndex) => {
+    const asset = assets.find((item) => item.title === title);
+    const build = (kind, count, offset) => Array.from({ length: count }, (_, logIndex) => ({
+      id: `log-usage-${profileIndex}-${kind}-${logIndex}`, kind, actorId: kind === "system" ? "system-client" : users[(profileIndex + logIndex) % users.length].id,
+      actorName: kind === "system" ? "业务系统" : users[(profileIndex + logIndex) % users.length].name, departmentName: asset.departmentName,
+      action: kind === "portal" ? "查看资产详情" : kind === "download" ? "下载资产资料" : "系统调用资产", targetType: "asset", targetId: asset.id, targetName: asset.title,
+      result: "success", ip: "匿名演示", device: kind === "system" ? "connector" : "GitHub Pages", requestId: `DEMO-${profileIndex}-${kind}-${logIndex}`,
+      detail: "演示环境使用记录", createdAt: demoDate(-((logIndex * 3 + offset + profileIndex) % 28))
+    }));
+    return [...build("portal", views, 0), ...build("download", downloads, 1), ...build("system", calls, 2)];
+  });
+  const logs = [{
+    id: "log-login", kind: "login", actorId: users[0].id, actorName: users[0].name, departmentName: users[0].departmentName, action: "登录成功",
+    targetType: "session", targetId: "github-pages", targetName: "管理后台", result: "success", ip: "匿名演示", device: "GitHub Pages", requestId: "DEMO-LOGIN", detail: "演示环境初始化记录", createdAt: DEMO_DATE
+  }, ...usageLogs];
+  const expenseDefinitions = [
+    ["telecom", "企业通信与电话服务", 4600, 5000, "中国电信"], ["network", "办公与机房网络专线", 12800, 14000, "企业网络服务商"],
+    ["cloud", "云服务器与对象存储", 28600, 30000, "云资源服务商"], ["software_subscription", "软件订阅与域名证书", 9200, 10000, "企业软件服务商"],
+    ["ip_application", "专利与软著申请服务", 18000, 22000, "知识产权代理机构"], ["ip_annual_fee", "专利年费与资料复核", 7600, 9000, "知识产权管理机构"]
+  ];
+  const periods = ["2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07"];
+  const maintenanceExpenses = periods.flatMap((period, monthIndex) => expenseDefinitions.map(([category, name, baseAmount, budgetAmount, vendor], categoryIndex) => {
+    const owner = users[(categoryIndex + 1) % users.length];
+    return {
+      id: `expense-${period}-${category}`, name, category, period, amount: baseAmount + monthIndex * (categoryIndex + 1) * 180, budgetAmount, vendor,
+      dueDate: monthIndex === periods.length - 1 ? demoDate(categoryIndex === 4 ? 12 : categoryIndex === 2 ? 25 : 40 + categoryIndex) : `${period}-25T00:00:00.000Z`,
+      ownerId: owner.id, ownerName: owner.name, departmentId: owner.departmentId, departmentName: owner.departmentName,
+      status: monthIndex === periods.length - 1 && categoryIndex < 2 ? "pending" : "paid", source: categoryIndex % 2 === 0 ? "kingdee" : "manual",
+      kingdeeAccountCode: `6602.${String(categoryIndex + 1).padStart(2, "0")}`, kingdeeVoucherNo: monthIndex === periods.length - 1 && categoryIndex < 2 ? undefined : `KD-${period.replace("-", "")}-${categoryIndex + 1}`,
+      relatedAssetIds: category === "cloud" ? assets.filter((item) => ["platform", "saas"].includes(item.type)).slice(0, 4).map((item) => item.id) : category.startsWith("ip_") ? ipAssets.slice(0, 3).map((item) => item.id) : [],
+      notes: "演示费用，可由金蝶科目与凭证同步替换。", createdAt: `${period}-01T00:00:00.000Z`, updatedAt: DEMO_DATE
+    };
+  }));
   return {
-    users, departments, assets, relations, reviews, systems, templates, logs, businessVersions: [
+    users, departments, assets, relations, reviews, systems, templates, logs, maintenanceExpenses, businessVersions: [
       { id: "ip-version-1", ipAssetId: ipAssets[2].id, version: "V1.0", name: "首次登记版本", releasedAt: "2025-01-10", description: "ERP核心业务功能版本", relatedProductVersion: "V1.0", ownerId: "user-admin", ownerName: "演示管理员", createdAt: DEMO_DATE }
     ],
     archiveRevisions: [], reminders: [
-      { id: "reminder-1", ipAssetId: ipAssets[1].id, ipAssetTitle: ipAssets[1].title, type: "annual_fee", dueAt: "2026-10-30", remindAt: "2026-07-30", status: "open", ownerId: "user-admin", ownerName: "演示管理员", systemIds: ["sys-daling"], createdAt: DEMO_DATE }
+      { id: "reminder-1", ipAssetId: ipAssets[1].id, ipAssetTitle: ipAssets[1].title, type: "annual_fee", dueDate: "2026-10-30", remindAt: "2026-07-30", offsetDays: 90, status: "open", ownerId: "user-admin", ownerName: "演示管理员", collaboratorIds: [], systemIds: ["sys-daling"], taskDispatchIds: [], generated: true, createdAt: DEMO_DATE, updatedAt: DEMO_DATE }
     ], migrationIssues: [], dispatches: [
       { id: "dispatch-1", idempotencyKey: "demo-dispatch-1", assetId: assets[0].id, assetTitle: assets[0].title, revisionId: `${assets[0].id}-r1`, systemId: "sys-mes", systemName: "汉脑MES", templateId: "tpl-mes", status: "failed", attempt: 5, error: "演示：负责人字段映射待确认", createdAt: DEMO_DATE, updatedAt: DEMO_DATE }
     ], releases: [
@@ -146,7 +181,11 @@ function initialState() {
 function readState() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : initialState();
+    if (!saved) return initialState();
+    const state = JSON.parse(saved);
+    state.maintenanceExpenses ||= initialState().maintenanceExpenses;
+    state.reminders?.forEach((reminder) => { reminder.dueDate ||= reminder.dueAt; });
+    return state;
   } catch {
     return initialState();
   }
@@ -208,6 +247,11 @@ function dashboard(state) {
   const pendingReviews = state.reviews.filter((item) => item.status === "pending");
   const taskFailures = state.dispatches.filter((item) => ["failed", "retrying"].includes(item.status));
   const openReminders = state.reminders.filter((item) => item.status === "open");
+  const demoNow = Date.parse(DEMO_DATE);
+  const routeByType = {
+    case: "assets.case", industry: "assets.industry", platform: "assets.platform", software: "assets.software", saas: "assets.saas", scene: "assets.scene",
+    hardware: "assets.hardware", equipment: "assets.equipment", document: "documents.overview", ip: "ip.overview", governance: "governance.overview"
+  };
   const statusSummary = [
     { status: "reviewing", label: "审核中", count: assets.filter((item) => ["reviewing", "approved"].includes(item.status)).length, color: "#2f73f6" },
     { status: "published", label: "已发布", count: publishedAssets.length, color: "#26b982" },
@@ -233,7 +277,35 @@ function dashboard(state) {
     result[item.departmentName] = (result[item.departmentName] || 0) + 1;
     return result;
   }, {})).map(([department, count]) => ({ department, count })).sort((left, right) => right.count - left.count);
-  const demoNow = Date.parse(DEMO_DATE);
+  const usageByAsset = new Map();
+  state.logs.forEach((log) => {
+    if (!["portal", "download", "system"].includes(log.kind) || log.result !== "success") return;
+    const current = usageByAsset.get(log.targetId) || { views: 0, downloads: 0, systemCalls: 0, total: 0 };
+    if (!current.lastUsedAt || Date.parse(log.createdAt) > Date.parse(current.lastUsedAt)) current.lastUsedAt = log.createdAt;
+    if (Date.parse(log.createdAt) >= demoNow - 30 * DAY_MS) {
+      if (log.kind === "portal") current.views += 1;
+      if (log.kind === "download") current.downloads += 1;
+      if (log.kind === "system") current.systemCalls += 1;
+      current.total += 1;
+    }
+    usageByAsset.set(log.targetId, current);
+  });
+  const usageEligibleAssets = assets.filter((item) => !["ip", "governance"].includes(item.type));
+  const popularAssets = usageEligibleAssets.map((asset) => ({
+    id: asset.id, title: asset.title, type: asset.type, typeLabel: asset.category, ownerName: asset.ownerName, routeId: routeByType[asset.type] || "assets.overview",
+    ...(usageByAsset.get(asset.id) || { views: 0, downloads: 0, systemCalls: 0, total: 0 })
+  })).filter((item) => item.total > 0).sort((left, right) => right.total - left.total).slice(0, 5);
+  const activeAssetIds = new Set([...usageByAsset.entries()].filter(([, usage]) => usage.total > 0).map(([id]) => id));
+  const idleAssets = usageEligibleAssets.filter((asset) => {
+    const lastUsedAt = usageByAsset.get(asset.id)?.lastUsedAt;
+    return !lastUsedAt || Date.parse(lastUsedAt) < demoNow - 90 * DAY_MS;
+  }).map((asset) => {
+    const lastUsedAt = usageByAsset.get(asset.id)?.lastUsedAt;
+    return {
+      id: asset.id, title: asset.title, type: asset.type, typeLabel: asset.category, ownerName: asset.ownerName, departmentName: asset.departmentName, lastUsedAt,
+      idleDays: lastUsedAt ? Math.floor((demoNow - Date.parse(lastUsedAt)) / DAY_MS) : null, routeId: routeByType[asset.type] || "assets.overview"
+    };
+  }).sort((left, right) => Number(right.typeLabel === "产品设计") - Number(left.typeLabel === "产品设计") || (right.idleDays ?? 9999) - (left.idleDays ?? 9999));
   const ipDeadlines = state.reminders.map((reminder) => {
     const asset = state.assets.find((item) => item.id === reminder.ipAssetId);
     return {
@@ -252,6 +324,48 @@ function dashboard(state) {
     { id: "migration-issues", title: "待确认绑定", detail: `${state.migrationIssues.filter((item) => item.status === "pending").length} 项历史关系待确认`, count: state.migrationIssues.filter((item) => item.status === "pending").length, tone: "warning", routeId: "ip.migration" },
     { id: "task-failures", title: "系统协同异常", detail: `${taskFailures.length} 项任务等待重试或人工处理`, count: taskFailures.length, tone: taskFailures.length ? "danger" : "success", routeId: "tasks.exceptions" }
   ];
+  const staleThreshold = (asset) => ["platform", "software", "saas"].includes(asset.type) ? 90 : 180;
+  const staleAssets = usageEligibleAssets.map((asset) => ({ asset, days: Math.floor((demoNow - Date.parse(asset.updatedAt)) / DAY_MS) })).filter(({ asset, days }) => days >= staleThreshold(asset));
+  const maintenanceWarnings = [
+    ...staleAssets.map(({ asset, days }) => ({ id: `stale-${asset.id}`, kind: "stale", title: asset.title, detail: `${days} 天未更新，${asset.category}建议由 ${asset.ownerName} 复核版本与展示内容`, ownerName: asset.ownerName, dueDate: asset.updatedAt, severity: days >= 180 ? "danger" : "warning", days, routeId: routeByType[asset.type] || "assets.overview" })),
+    ...idleAssets.map((asset) => ({ id: `idle-${asset.id}`, kind: "idle", title: asset.title, detail: asset.lastUsedAt ? `已连续 ${asset.idleDays} 天无访问、下载或系统调用` : "尚无访问、下载或系统调用记录，建议评估归档或重新推广", ownerName: asset.ownerName, dueDate: asset.lastUsedAt, severity: "warning", days: asset.idleDays ?? 9999, routeId: asset.routeId })),
+    ...assets.filter((asset) => !asset.attachments.length).map((asset) => ({ id: `missing-file-${asset.id}`, kind: "missing_file", title: asset.title, detail: `缺少支撑材料，负责人 ${asset.ownerName} 需补充可验证附件`, ownerName: asset.ownerName, dueDate: asset.updatedAt, severity: "danger", days: 9998, routeId: routeByType[asset.type] || "assets.overview" }))
+  ].sort((left, right) => left.severity === right.severity ? right.days - left.days : left.severity === "danger" ? -1 : 1);
+  const featuredWarnings = [
+    ...maintenanceWarnings.filter((item) => item.kind === "idle").slice(0, 3),
+    ...maintenanceWarnings.filter((item) => item.kind === "stale").slice(0, 3),
+    ...maintenanceWarnings.filter((item) => item.kind === "missing_file").slice(0, 2)
+  ];
+  const pendingActions = [
+    ...pendingReviews.map((review) => ({ id: `review-${review.id}`, type: "review", title: review.assetTitle, detail: `由 ${review.submitterName} 提交，等待 ${review.reviewerName} 审核`, ownerName: review.reviewerName, dueDate: new Date(Date.parse(review.submittedAt) + 3 * DAY_MS).toISOString(), priority: "high", routeId: "workflow.reviews" })),
+    ...openReminders.map((reminder) => ({ id: `reminder-${reminder.id}`, type: "ip", title: reminder.ipAssetTitle, detail: reminder.type === "annual_fee" ? "专利年费待处理" : reminder.type === "expiry" ? "知识产权期限待处理" : "知识产权资料待复核", ownerName: reminder.ownerName, dueDate: reminder.dueDate, priority: Date.parse(reminder.dueDate) - demoNow <= 30 * DAY_MS ? "urgent" : "high", routeId: "ip.deadlines" })),
+    ...taskFailures.map((task) => ({ id: `task-${task.id}`, type: "task", title: task.assetTitle, detail: `${task.systemName}任务创建失败，已尝试 ${task.attempt} 次`, ownerName: "系统管理员", dueDate: task.nextRetryAt || task.updatedAt, priority: "urgent", routeId: "tasks.exceptions" }))
+  ].sort((left, right) => left.priority === right.priority ? Date.parse(left.dueDate) - Date.parse(right.dueDate) : left.priority === "urgent" ? -1 : 1);
+  const expenseCategories = Object.entries(state.maintenanceExpenses.reduce((result, expense) => {
+    result[expense.category] = (result[expense.category] || 0) + expense.amount;
+    return result;
+  }, {})).map(([category, amount]) => ({
+    category,
+    label: ({ telecom: "通信电话", network: "网络专线", cloud: "云服务", ip_application: "专利软著申请", ip_annual_fee: "知识产权年费", software_subscription: "软件订阅", other: "其他" })[category] || category,
+    amount
+  })).sort((left, right) => right.amount - left.amount);
+  const expenseTrend = ["2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07"].map((period) => {
+    const rows = state.maintenanceExpenses.filter((expense) => expense.period === period);
+    return { period, label: `${Number(period.slice(5))}月`, actual: rows.reduce((sum, expense) => sum + expense.amount, 0), budget: rows.reduce((sum, expense) => sum + expense.budgetAmount, 0) };
+  });
+  const expenseActual = state.maintenanceExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+  const expenseBudget = state.maintenanceExpenses.reduce((sum, expense) => sum + expense.budgetAmount, 0);
+  const upcomingExpenses = state.maintenanceExpenses.filter((expense) => ["planned", "pending", "overdue"].includes(expense.status) && Date.parse(expense.dueDate) <= demoNow + 60 * DAY_MS).sort((left, right) => Date.parse(left.dueDate) - Date.parse(right.dueDate)).slice(0, 5);
+  const ipComposition = [
+    { name: "专利", value: ipAssets.filter((item) => item.ipProfile?.kind === "patent").length, routeId: "ip.patents" },
+    { name: "软件著作权", value: ipAssets.filter((item) => item.ipProfile?.kind === "software_copyright").length, routeId: "ip.copyrights" },
+    { name: "其他无形资产", value: Math.max(0, assets.length - ipAssets.length), routeId: "assets.overview" }
+  ];
+  const freshnessSummary = [
+    { name: "90天内更新", value: assets.filter((asset) => demoNow - Date.parse(asset.updatedAt) <= 90 * DAY_MS).length },
+    { name: "91-180天", value: assets.filter((asset) => demoNow - Date.parse(asset.updatedAt) > 90 * DAY_MS && demoNow - Date.parse(asset.updatedAt) <= 180 * DAY_MS).length },
+    { name: "超过180天", value: assets.filter((asset) => demoNow - Date.parse(asset.updatedAt) > 180 * DAY_MS).length }
+  ];
   return {
     metrics: {
       totalAssets: assets.length,
@@ -264,18 +378,38 @@ function dashboard(state) {
       ipAssets: ipAssets.length,
       patents: ipAssets.filter((item) => item.ipProfile?.kind === "patent").length,
       copyrights: ipAssets.filter((item) => item.ipProfile?.kind === "software_copyright").length,
-      governancePending: pendingReviews.length + taskFailures.length + openReminders.length,
+      governancePending: pendingActions.length + maintenanceWarnings.length,
+      activeAssets30d: activeAssetIds.size,
+      idleAssets90d: idleAssets.length,
+      usageEvents30d: [...usageByAsset.values()].reduce((sum, usage) => sum + usage.total, 0),
+      updateWarnings: maintenanceWarnings.length,
+      pendingActions: pendingActions.length,
+      maintenanceCostYtd: expenseActual,
+      maintenanceBudgetYtd: expenseBudget,
       accessReviews: state.users.filter((item) => item.status === "active").length,
       attachments: assets.reduce((sum, item) => sum + item.attachments.length, 0)
     },
     currentVersion: state.settings.currentVersion,
     lastHrSyncAt: state.settings.lastHrSyncAt,
+    scopeLabel: "全公司",
     activityTrend,
     statusSummary,
     departmentContributions,
     governanceRisks,
     ipDeadlines,
     systemStatuses: state.systems.map((system) => ({ ...system, taskFailures: taskFailures.filter((item) => item.systemId === system.id).length })),
+    pendingActions: pendingActions.slice(0, 8),
+    popularAssets,
+    idleAssets: idleAssets.slice(0, 8),
+    maintenanceWarnings: featuredWarnings,
+    ipComposition,
+    freshnessSummary,
+    expenseSummary: { ytdActual: expenseActual, ytdBudget: expenseBudget, budgetRate: expenseBudget ? Math.round(expenseActual / expenseBudget * 100) : 0, categories: expenseCategories, trend: expenseTrend, upcoming: upcomingExpenses },
+    managementTips: [
+      `${idleAssets.length} 项资产连续 90 天无使用记录，优先复核产品设计、方案和资料是否仍有复用价值。`,
+      `${staleAssets.length} 项资产超过更新周期，建议按负责人发起版本和展示内容复核。`,
+      `${upcomingExpenses.length} 项公共维护费用将在 60 天内到期，需确认预算、供应商和续费必要性。`
+    ],
     recentReviews: state.reviews.slice(0, 6), recentLogs: state.logs.slice(0, 8), recentTasks: state.dispatches.slice(0, 6),
     typeSummary: Object.entries(assets.reduce((result, item) => ({ ...result, [item.type]: (result[item.type] || 0) + 1 }), {})).map(([type, count]) => ({ type, count }))
   };
