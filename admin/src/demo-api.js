@@ -201,17 +201,83 @@ function ipWorkspace(state) {
 }
 
 function dashboard(state) {
+  const assets = state.assets.filter((item) => item.status !== "archived");
+  const publishedAssets = assets.filter((item) => item.status === "published");
+  const publicAssets = publishedAssets.filter((item) => item.channel === "both" && !["confidential", "restricted"].includes(item.sensitivity));
+  const ipAssets = assets.filter((item) => item.type === "ip" && item.ipProfile);
+  const pendingReviews = state.reviews.filter((item) => item.status === "pending");
+  const taskFailures = state.dispatches.filter((item) => ["failed", "retrying"].includes(item.status));
+  const openReminders = state.reminders.filter((item) => item.status === "open");
+  const statusSummary = [
+    { status: "reviewing", label: "审核中", count: assets.filter((item) => ["reviewing", "approved"].includes(item.status)).length, color: "#2f73f6" },
+    { status: "published", label: "已发布", count: publishedAssets.length, color: "#26b982" },
+    { status: "draft", label: "草稿", count: assets.filter((item) => ["draft", "rejected"].includes(item.status)).length, color: "#ff8a3d" }
+  ];
+  const activityValues = {
+    maintenance: [4, 6, 5, 8, 7, 9, 12],
+    accessDownloads: [7, 9, 8, 11, 10, 13, 15],
+    systemCollaboration: [2, 3, 4, 3, 5, 4, 6]
+  };
+  const activityTrend = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(DEMO_DATE);
+    date.setDate(date.getDate() - (6 - index));
+    return {
+      date: date.toISOString().slice(0, 10),
+      label: `${date.getMonth() + 1}/${date.getDate()}`,
+      maintenance: activityValues.maintenance[index],
+      accessDownloads: activityValues.accessDownloads[index],
+      systemCollaboration: activityValues.systemCollaboration[index]
+    };
+  });
+  const departmentContributions = Object.entries(assets.reduce((result, item) => {
+    result[item.departmentName] = (result[item.departmentName] || 0) + 1;
+    return result;
+  }, {})).map(([department, count]) => ({ department, count })).sort((left, right) => right.count - left.count);
+  const demoNow = Date.parse(DEMO_DATE);
+  const ipDeadlines = state.reminders.map((reminder) => {
+    const asset = state.assets.find((item) => item.id === reminder.ipAssetId);
+    return {
+      id: reminder.id,
+      assetId: reminder.ipAssetId,
+      title: asset?.title || reminder.ipAssetTitle || "知识产权事项",
+      typeLabel: reminder.type === "annual_fee" ? "年费" : reminder.type === "expiry" ? "期限" : "资料复核",
+      dueDate: reminder.dueDate,
+      ownerName: reminder.ownerName,
+      daysRemaining: Math.ceil((Date.parse(reminder.dueDate) - demoNow) / 86400000)
+    };
+  }).filter((item) => Number.isFinite(item.daysRemaining)).sort((left, right) => left.daysRemaining - right.daysRemaining).slice(0, 6);
+  const governanceRisks = [
+    { id: "pending-reviews", title: "待审核内容", detail: `${pendingReviews.length} 项内容等待模块评审`, count: pendingReviews.length, tone: "warning", routeId: "workflow.reviews" },
+    { id: "ip-deadlines", title: "知识产权期限", detail: `${openReminders.length} 项提醒等待处理`, count: openReminders.length, tone: openReminders.length ? "danger" : "success", routeId: "ip.deadlines" },
+    { id: "migration-issues", title: "待确认绑定", detail: `${state.migrationIssues.filter((item) => item.status === "pending").length} 项历史关系待确认`, count: state.migrationIssues.filter((item) => item.status === "pending").length, tone: "warning", routeId: "ip.migration" },
+    { id: "task-failures", title: "系统协同异常", detail: `${taskFailures.length} 项任务等待重试或人工处理`, count: taskFailures.length, tone: taskFailures.length ? "danger" : "success", routeId: "tasks.exceptions" }
+  ];
   return {
     metrics: {
-      totalAssets: state.assets.filter((item) => item.status !== "archived").length,
-      pendingReviews: state.reviews.filter((item) => item.status === "pending").length,
-      taskFailures: state.dispatches.filter((item) => ["failed", "retrying"].includes(item.status)).length,
-      publicAssets: state.assets.filter((item) => item.channel === "both" && item.status === "published").length,
+      totalAssets: assets.length,
+      publishedAssets: publishedAssets.length,
+      pendingReviews: pendingReviews.length,
+      approvedReviews: state.reviews.filter((item) => item.status === "approved").length,
+      taskFailures: taskFailures.length,
+      publicAssets: publicAssets.length,
+      publicCoverage: assets.length ? Math.round(publicAssets.length / assets.length * 100) : 0,
+      ipAssets: ipAssets.length,
+      patents: ipAssets.filter((item) => item.ipProfile?.kind === "patent").length,
+      copyrights: ipAssets.filter((item) => item.ipProfile?.kind === "software_copyright").length,
+      governancePending: pendingReviews.length + taskFailures.length + openReminders.length,
       accessReviews: state.users.filter((item) => item.status === "active").length,
-      attachments: state.assets.reduce((sum, item) => sum + item.attachments.length, 0)
+      attachments: assets.reduce((sum, item) => sum + item.attachments.length, 0)
     },
+    currentVersion: state.settings.currentVersion,
+    lastHrSyncAt: state.settings.lastHrSyncAt,
+    activityTrend,
+    statusSummary,
+    departmentContributions,
+    governanceRisks,
+    ipDeadlines,
+    systemStatuses: state.systems.map((system) => ({ ...system, taskFailures: taskFailures.filter((item) => item.systemId === system.id).length })),
     recentReviews: state.reviews.slice(0, 6), recentLogs: state.logs.slice(0, 8), recentTasks: state.dispatches.slice(0, 6),
-    typeSummary: Object.entries(state.assets.reduce((result, item) => ({ ...result, [item.type]: (result[item.type] || 0) + 1 }), {})).map(([type, count]) => ({ type, count }))
+    typeSummary: Object.entries(assets.reduce((result, item) => ({ ...result, [item.type]: (result[item.type] || 0) + 1 }), {})).map(([type, count]) => ({ type, count }))
   };
 }
 

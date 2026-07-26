@@ -33,6 +33,18 @@ test("本地管理员可以登录，错误密码会写入拒绝日志", async ()
   assert.equal(service.logs("login")[0].result, "denied");
 });
 
+test("治理工作台返回完整指标和可视化数据", async () => {
+  const service = await createService();
+  const dashboard = service.dashboard();
+  assert.equal(dashboard.activityTrend.length, 7);
+  assert.equal(dashboard.statusSummary.reduce((sum, item) => sum + item.count, 0), dashboard.metrics.totalAssets);
+  assert.ok(dashboard.departmentContributions.length > 0);
+  assert.ok(dashboard.governanceRisks.some((item) => item.routeId === "workflow.reviews"));
+  assert.equal(dashboard.systemStatuses.length, service.snapshot().systems.length);
+  assert.equal(dashboard.metrics.ipAssets, dashboard.metrics.patents + dashboard.metrics.copyrights);
+  assert.ok(dashboard.metrics.publicCoverage >= 0 && dashboard.metrics.publicCoverage <= 100);
+});
+
 test("乐观锁阻止旧版本覆盖资产", async () => {
   const service = await createService();
   const asset = service.listAssets({})[1];

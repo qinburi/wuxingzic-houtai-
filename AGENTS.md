@@ -65,7 +65,10 @@ npm run start:server
 
 ```bash
 npm run test
+npm run test:admin
 npm run test:server
+node --test admin/test/navigation.test.js
+node --test admin/test/flow-navigation.test.js
 npx tsx --test server/test/state.test.ts
 npx tsc -p server/tsconfig.json --noEmit
 ```
@@ -85,7 +88,8 @@ git status --short
 
 ```text
 .
-├── admin/src/            # Vue 管理端页面、API、图表、图标和演示数据
+├── admin/src/            # Vue 管理端、菜单、流程、API、图表和演示数据
+├── admin/test/           # 菜单权限、状态恢复和流程布局测试
 ├── collector/            # 隔离的公网匿名行为采集服务
 ├── scripts/              # GitHub Pages 管理端发布脚本
 ├── server/src/           # NestJS API、领域规则、持久化和文件存储
@@ -99,6 +103,9 @@ git status --short
 关键文件：
 
 - `admin/src/App.vue`：管理端模块、编辑器、审核、配置和工作台。
+- `admin/src/DashboardView.vue`：治理工作台指标、ChartCube 图表和风险入口。
+- `admin/src/FlowNavigator.vue`、`flow-navigation.js`、`flow-layout.js`：可点击业务流程、节点定义和无重叠布局。
+- `admin/src/navigation.js`：集中式菜单、权限过滤和页签恢复；`portal-links.js`：受白名单约束的门户跳转。
 - `admin/src/styles.css`：管理端布局和响应式规则。
 - `admin/src/api.js`：真实 API 请求和下载封装。
 - `admin/src/demo-api.js`：GitHub Pages 浏览器内演示数据。
@@ -261,12 +268,16 @@ LOCAL_UPLOAD_DIR=server/uploads
 
 ```bash
 npm run test
+npm run test:admin
 npm run test:server
+node --test admin/test/navigation.test.js
+node --test admin/test/flow-navigation.test.js
 npx tsx --test server/test/state.test.ts
 npx tsc -p server/tsconfig.json --noEmit
 ```
 
 - 每个测试独立创建服务和状态，不依赖执行顺序，不复用其他测试修改过的对象。
+- 管理端导航或流程变化必须补充 `admin/test/`，校验唯一导航 ID、权限过滤、状态恢复、节点目标及节点/连线无重叠。
 - 优先使用构造函数注入和小型内存 fake。参考 `server/test/state.test.ts` 的 `MemoryPersistence`：`load()` 返回内存状态，`save()` 使用 `structuredClone`，然后调用 `StateService.onModuleInit()`。
 - 使用 `server/src/seed.ts` 的确定性数据作为 fixture；需要稳定时间、ID 或外部响应时，在测试边界固定输入。
 - 单元测试不得连接真实 PostgreSQL、MinIO、短信、达铃或目标系统，也不得写入本地运行状态、上传、备份和发布目录。

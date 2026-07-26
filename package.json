@@ -16,7 +16,8 @@
     "build:server": "tsc -p server/tsconfig.json",
     "build": "npm run build:admin && npm run build:server",
     "build:all": "npm run build",
-    "test": "npm run test:server",
+    "test": "npm run test:admin && npm run test:server",
+    "test:admin": "node --test admin/test/*.test.js",
     "test:server": "tsx --test server/test/*.test.ts"
   },
   "dependencies": {

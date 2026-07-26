@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import {
   Activity,
   AlertTriangle,
@@ -61,24 +61,18 @@ import {
 } from "@lucide/vue";
 import { ASSET_TYPE_LABELS, IP_KIND_LABELS, IP_LEGAL_STATUS_LABELS, PATENT_TYPE_LABELS, REVISION_STATUS_LABELS, SENSITIVITY_LABELS } from "../../shared/contracts.ts";
 import logoUrl from "../../public/assets/brand/hannao-logo-transparent.png";
+import sidebarLogoUrl from "../../public/assets/brand/hannao-sidebar-logo.png";
+import DashboardView from "./DashboardView.vue";
+import FlowNavigator from "./FlowNavigator.vue";
 import { api, download, getToken, isDemoMode, patch, post, remove, setToken } from "./api.js";
-import ChartCubeChart from "./components/ChartCubeChart.vue";
-import IconFont from "./components/IconFont.vue";
+import { filterNavigationForUser, flattenNavigation, legacyRouteMap, sanitizeNavigationState } from "./navigation.js";
+import { buildPortalUrl, DEFAULT_PORTAL_URL } from "./portal-links.js";
 
-const navItems = [
-  { id: "dashboard", label: "工作台", icon: LayoutDashboard },
-  { id: "assets", label: "资产中心", icon: Boxes },
-  { id: "ip", label: "知识产权", icon: Scale },
-  { id: "documents", label: "资料与文件", icon: FolderArchive },
-  { id: "governance", label: "投入与治理", icon: Gauge },
-  { id: "display", label: "展示配置", icon: PanelTop },
-  { id: "workflow", label: "审核发布", icon: GitPullRequest },
-  { id: "organization", label: "组织与权限", icon: Users },
-  { id: "integrations", label: "系统开放", icon: Cable },
-  { id: "tasks", label: "系统任务", icon: Workflow },
-  { id: "logs", label: "日志与分析", icon: FileArchive },
-  { id: "settings", label: "系统管理", icon: Settings }
-];
+const iconComponents = {
+  Activity, AlertTriangle, Boxes, Building2, Cable, Clock3, Copyright, Database, Download, FileArchive, FileText,
+  FolderArchive, Gauge, GitPullRequest, History, KeyRound, LayoutDashboard, Link2, Monitor, PanelTop, Paperclip,
+  RefreshCw, Scale, Send, Server, ShieldCheck, Users, Workflow
+};
 
 const assetTypeOptions = Object.entries(ASSET_TYPE_LABELS);
 const statusOptions = Object.entries(REVISION_STATUS_LABELS);
@@ -86,9 +80,14 @@ const sensitivityOptions = Object.entries(SENSITIVITY_LABELS);
 const token = ref(getToken());
 const currentUser = ref(null);
 const activeModule = ref("dashboard");
-const openedTabs = ref([{ id: "dashboard", label: "工作台", icon: LayoutDashboard }]);
+const activeRouteId = ref("dashboard");
+const expandedGroupId = ref("");
+const menuPanelTop = ref(72);
+const openedTabs = ref([]);
+const restoredUserId = ref("");
 const loading = ref(false);
 const mobileMenu = ref(false);
+let menuCloseTimer = null;
 const toast = reactive({ visible: false, message: "", tone: "success" });
 const loginForm = reactive({ phone: "10000000000", password: "Admin@123", busy: false });
 
@@ -101,6 +100,10 @@ const integrations = ref({ systems: [], templates: [], dispatches: [] });
 const logs = ref([]);
 const ipWorkspace = ref({ metrics: {}, assets: [], businessVersions: [], archiveRevisions: [], relations: [], reminders: [], migrationIssues: [], reminderRules: {} });
 const ipSection = ref("overview");
+const workflowSection = ref("reviews");
+const organizationSection = ref("sync");
+const integrationSection = ref("systems");
+const settingsSection = ref("health");
 const ipFilters = reactive({ keyword: "", kind: "", status: "" });
 const ipEditor = reactive({ open: false, tab: "basic", saving: false, isNew: false, data: null, detail: null });
 const ipUpload = reactive({ materialType: "证书", visibility: "internal", publicMode: "preview", businessVersionId: "", replacesAttachmentId: "" });
@@ -108,11 +111,11 @@ const ipVersionForm = reactive({ version: "V1.0", name: "", releasedAt: "", desc
 const relationForm = reactive({ ipAssetId: "", relatedAssetId: "", relationType: "supporting", contributionNote: "", quick: false, title: "", kind: "patent", legalStatus: "preparation", referenceNumber: "" });
 
 const filters = reactive({ keyword: "", type: "", status: "", channel: "", page: 1, pageSize: 10 });
+const filterStates = Object.create(null);
 const expandedRows = ref(new Set());
 const selectedRows = ref(new Set());
 const editor = reactive({ open: false, tab: "basic", saving: false, isNew: false, data: null, ipRelations: [] });
 const modal = reactive({ open: false, type: "", title: "", data: null, comment: "", decision: "approve", selected: [], busy: false });
-const logKind = ref("");
 const logFilters = reactive({ keyword: "", date: "" });
 const displayFieldOptions = [["title", "名称"], ["summary", "说明"], ["version", "版本"], ["owner", "负责人"], ["department", "部门"], ["amount", "金额"], ["attachments", "附件"]];
 
@@ -127,10 +130,16 @@ const displayModules = ref([
   { id: "hardware", name: "智能硬件与设备", visible: true, publicVisible: true, sort: 8, featured: 10 }
 ]);
 
-const activeNav = computed(() => navItems.find((item) => item.id === activeModule.value) || navItems[0]);
+const visibleNavigation = computed(() => filterNavigationForUser(currentUser.value));
+const visibleNavItems = computed(() => flattenNavigation(visibleNavigation.value));
+const accessibleRouteIds = computed(() => visibleNavItems.value.map((item) => item.id));
+const portalBaseUrl = import.meta.env.VITE_PORTAL_URL || DEFAULT_PORTAL_URL;
+const activeNav = computed(() => visibleNavItems.value.find((item) => item.id === activeRouteId.value) || visibleNavItems.value[0] || { id: "dashboard", label: "工作台", groupLabel: "工作台", module: "dashboard", icon: "LayoutDashboard" });
+const activeGroup = computed(() => visibleNavigation.value.find((group) => group.id === activeNav.value.groupId));
+const expandedGroup = computed(() => visibleNavigation.value.find((group) => group.id === expandedGroupId.value));
 const scopedAssets = computed(() => {
   const scope = activeModule.value === "documents"
-    ? ["document", "ip"]
+    ? ["document"]
     : activeModule.value === "governance"
       ? ["governance"]
       : ["case", "industry", "platform", "software", "saas", "scene", "hardware", "equipment"];
@@ -138,6 +147,8 @@ const scopedAssets = computed(() => {
   return assets.value.filter((asset) => {
     if (!scope.includes(asset.type)) return false;
     if (filters.type && asset.type !== filters.type) return false;
+    if (activeNav.value.categories?.length && !activeNav.value.categories.includes(asset.category)) return false;
+    if (activeNav.value.filesOnly && !asset.attachments?.length) return false;
     if (filters.status && asset.status !== filters.status) return false;
     if (filters.channel && asset.channel !== filters.channel) return false;
     if (keyword && !`${asset.title} ${asset.code} ${asset.ownerName} ${asset.departmentName}`.toLowerCase().includes(keyword)) return false;
@@ -147,12 +158,13 @@ const scopedAssets = computed(() => {
 const pageCount = computed(() => Math.max(1, Math.ceil(scopedAssets.value.length / filters.pageSize)));
 const pagedAssets = computed(() => scopedAssets.value.slice((filters.page - 1) * filters.pageSize, filters.page * filters.pageSize));
 const filteredLogs = computed(() => logs.value.filter((log) => {
-  if (logKind.value && log.kind !== logKind.value) return false;
+  if (activeNav.value.logKinds?.length && !activeNav.value.logKinds.includes(log.kind)) return false;
   const keyword = logFilters.keyword.trim().toLowerCase();
   if (keyword && !`${log.actorName} ${log.departmentName} ${log.action} ${log.targetName}`.toLowerCase().includes(keyword)) return false;
   if (logFilters.date && !String(log.createdAt).startsWith(logFilters.date)) return false;
   return true;
 }));
+const filteredTasks = computed(() => integrations.value.dispatches.filter((task) => !activeNav.value.taskStatuses?.length || activeNav.value.taskStatuses.includes(task.status)));
 const filteredIpAssets = computed(() => ipWorkspace.value.assets.filter((asset) => {
   if (ipSection.value === "patents" && asset.ipProfile?.kind !== "patent") return false;
   if (ipSection.value === "copyrights" && asset.ipProfile?.kind !== "software_copyright") return false;
@@ -162,78 +174,6 @@ const filteredIpAssets = computed(() => ipWorkspace.value.assets.filter((asset) 
   return !keyword || `${asset.title} ${asset.code} ${asset.ipProfile?.applicationNumber || ""} ${asset.ipProfile?.registrationNumber || ""} ${asset.ipProfile?.primaryOwnerName || ""}`.toLowerCase().includes(keyword);
 }));
 const relationTargetAssets = computed(() => assets.value.filter((asset) => ["case", "platform", "software", "saas", "scene", "hardware", "equipment"].includes(asset.type)));
-const dashboardPublishedCount = computed(() => assets.value.filter((asset) => asset.status === "published").length);
-const dashboardPublicCoverage = computed(() => {
-  const published = dashboardPublishedCount.value;
-  return published ? Math.round(assets.value.filter((asset) => asset.status === "published" && asset.channel === "both").length / published * 100) : 0;
-});
-const dashboardRiskCount = computed(() =>
-  reviews.value.filter((item) => item.status === "pending").length
-  + integrations.value.dispatches.filter((item) => ["failed", "retrying"].includes(item.status)).length
-  + ipWorkspace.value.reminders.filter((item) => item.status === "open").length
-  + ipWorkspace.value.migrationIssues.filter((item) => item.status === "pending").length
-);
-const dashboardStatusData = computed(() => {
-  const labels = { published: "已发布", approved: "待发布", reviewing: "审核中", draft: "草稿", rejected: "已驳回", archived: "已归档" };
-  return Object.entries(assets.value.reduce((result, asset) => {
-    result[asset.status] = (result[asset.status] || 0) + 1;
-    return result;
-  }, {})).map(([status, value]) => ({ name: labels[status] || status, value }));
-});
-const dashboardDepartmentData = computed(() => Object.values(assets.value.reduce((result, asset) => {
-  const name = asset.departmentName || "未分配部门";
-  result[name] ||= { name, value: 0 };
-  result[name].value += 1;
-  return result;
-}, {})).sort((left, right) => right.value - left.value).slice(0, 5));
-const dashboardTrendData = computed(() => {
-  const dayMs = 86400000;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const days = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(today.getTime() - (6 - index) * dayMs);
-    return { key: date.toISOString().slice(0, 10), label: `${date.getMonth() + 1}/${date.getDate()}` };
-  });
-  const series = [
-    { name: "内容维护", kinds: ["operation", "permission"] },
-    { name: "访问下载", kinds: ["portal", "download"] },
-    { name: "系统协同", kinds: ["system", "task"] }
-  ];
-  const rows = days.flatMap((day) => series.map((item) => ({
-    date: day.label,
-    series: item.name,
-    value: logs.value.filter((log) => String(log.createdAt).slice(0, 10) === day.key && item.kinds.includes(log.kind)).length
-  })));
-  if (isDemoMode && rows.filter((row) => row.value > 0).length <= 3) {
-    const demoValues = { "内容维护": [4, 6, 5, 8, 7, 9, 12], "访问下载": [7, 9, 8, 11, 10, 13, 15], "系统协同": [2, 3, 4, 3, 5, 4, 6] };
-    rows.forEach((row, index) => { row.value = demoValues[row.series][Math.floor(index / series.length)]; });
-  }
-  return rows;
-});
-const dashboardRiskItems = computed(() => [
-  { label: "审核积压", value: reviews.value.filter((item) => item.status === "pending").length, unit: "项", note: "等待模块审核人处理", tone: "amber", module: "workflow" },
-  { label: "任务异常", value: integrations.value.dispatches.filter((item) => ["failed", "retrying"].includes(item.status)).length, unit: "项", note: "目标系统创建或重试异常", tone: "red", module: "tasks" },
-  { label: "期限提醒", value: ipWorkspace.value.reminders.filter((item) => item.status === "open").length, unit: "项", note: "专利年费、期限或资料复核", tone: "blue", module: "ip" },
-  { label: "待确认绑定", value: ipWorkspace.value.migrationIssues.filter((item) => item.status === "pending").length, unit: "项", note: "历史知识产权关系待确认", tone: "violet", module: "ip" }
-]);
-const dashboardIpDeadlines = computed(() => ipWorkspace.value.reminders
-  .filter((item) => ["open", "scheduled"].includes(item.status))
-  .sort((left, right) => Date.parse(left.dueDate || left.dueAt || left.remindAt) - Date.parse(right.dueDate || right.dueAt || right.remindAt))
-  .slice(0, 5));
-const dashboardTodos = computed(() => [
-  ...reviews.value.filter((item) => item.status === "pending").map((item) => ({ id: `review-${item.id}`, kind: "内容审核", title: item.assetTitle, owner: item.reviewerName, time: item.submittedAt, priority: "高", status: "待审核", module: "workflow" })),
-  ...ipWorkspace.value.reminders.filter((item) => item.status === "open").map((item) => ({ id: `reminder-${item.id}`, kind: item.type === "annual_fee" ? "专利年费" : item.type === "expiry" ? "期限到期" : "资料复核", title: item.ipAssetTitle || item.title || "知识产权期限事项", owner: item.ownerName || "知识产权负责人", time: item.dueDate || item.dueAt || item.remindAt, priority: "中", status: "待处理", module: "ip" })),
-  ...integrations.value.dispatches.filter((item) => ["failed", "retrying"].includes(item.status)).map((item) => ({ id: `task-${item.id}`, kind: "系统任务", title: `${item.assetTitle} · ${item.systemName}`, owner: "系统管理员", time: item.updatedAt, priority: "高", status: item.status === "failed" ? "人工处理" : "自动重试", module: "tasks" }))
-].sort((left, right) => (left.priority === "高" ? -1 : 1) - (right.priority === "高" ? -1 : 1)).slice(0, 7));
-const dashboardQuickEntries = [
-  { label: "资产中心", note: "维护资产档案", icon: "assets", module: "assets" },
-  { label: "知识产权", note: "专利与软著", icon: "ip", module: "ip" },
-  { label: "审核发布", note: "处理审核队列", icon: "review", module: "workflow" },
-  { label: "展示配置", note: "设置公开字段", icon: "public", module: "display" },
-  { label: "组织权限", note: "达铃与授权", icon: "department", module: "organization" },
-  { label: "系统任务", note: "异常重试处理", icon: "system", module: "tasks" }
-];
-const dashboardChartColors = ["#246bfd", "#14b87a", "#ff8a34", "#ef4f67", "#7357e8", "#31b7d9"];
 
 function notify(message, tone = "success") {
   toast.message = message;
@@ -261,6 +201,153 @@ function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function iconComponent(name) {
+  return iconComponents[name] || FileText;
+}
+
+function navigationStorageKey(userId = currentUser.value?.id) {
+  return `hannao-admin-navigation:${userId || "anonymous"}`;
+}
+
+function routeById(id) {
+  const resolvedId = legacyRouteMap[id] || id;
+  return visibleNavItems.value.find((item) => item.id === resolvedId);
+}
+
+function badgeCount(item) {
+  if (item.badge === "reviews") return reviews.value.filter((review) => review.status === "pending").length;
+  if (item.badge === "task-errors") return integrations.value.dispatches.filter((task) => ["failed", "retrying"].includes(task.status)).length;
+  if (item.badge === "ip-reminders") return ipWorkspace.value.reminders.filter((reminder) => reminder.status === "open").length;
+  if (item.badge === "ip-migration") return ipWorkspace.value.migrationIssues.filter((issue) => issue.status === "pending").length;
+  return 0;
+}
+
+function groupBadgeCount(group) {
+  return group.children.reduce((total, item) => total + badgeCount(item), 0);
+}
+
+function persistNavigationState() {
+  if (!currentUser.value?.id) return;
+  try {
+    window.localStorage.setItem(navigationStorageKey(), JSON.stringify({
+      activeId: activeRouteId.value,
+      tabs: openedTabs.value.map((tab) => tab.id)
+    }));
+  } catch {
+    // Local storage can be unavailable in hardened browser profiles.
+  }
+}
+
+function saveCurrentFilterState() {
+  if (!["assets", "documents", "governance"].includes(activeModule.value)) return;
+  filterStates[activeRouteId.value] = { ...filters };
+}
+
+function loadFilterState(item) {
+  if (!["assets", "documents", "governance"].includes(item.module)) return;
+  const saved = filterStates[item.id];
+  Object.assign(filters, saved || { keyword: "", type: item.assetType || "", status: "", channel: "", page: 1, pageSize: 10 });
+  if (item.assetType) filters.type = item.assetType;
+  filters.page = 1;
+}
+
+function applyRouteSection(item) {
+  if (item.module === "ip") ipSection.value = item.section || "overview";
+  if (item.module === "workflow") workflowSection.value = item.section || "reviews";
+  if (item.module === "organization") organizationSection.value = item.section || "sync";
+  if (item.module === "integrations") integrationSection.value = item.section || "systems";
+  if (item.module === "settings") settingsSection.value = item.section || "health";
+}
+
+function openRoute(id, options = {}) {
+  const item = routeById(id) || routeById("dashboard");
+  if (!item) return;
+  saveCurrentFilterState();
+  activeRouteId.value = item.id;
+  activeModule.value = item.module;
+  editor.open = false;
+  ipEditor.open = false;
+  selectedRows.value = new Set();
+  loadFilterState(item);
+  applyRouteSection(item);
+  closeFloatingMenu();
+  mobileMenu.value = false;
+  if (options.addTab !== false && !openedTabs.value.some((tab) => tab.id === item.id)) openedTabs.value.push(item);
+  if (options.persist !== false) persistNavigationState();
+}
+
+function openPortalTarget(target = {}) {
+  const url = buildPortalUrl(portalBaseUrl, target, window.location.href);
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function isDesktopHoverNavigation() {
+  return window.innerWidth > 900;
+}
+
+function positionFloatingMenu(event) {
+  const triggerTop = event?.currentTarget?.getBoundingClientRect?.().top || 72;
+  menuPanelTop.value = window.innerWidth <= 900 ? 56 : Math.max(70, Math.min(triggerTop - 8, window.innerHeight - 430));
+}
+
+function cancelFloatingMenuClose() {
+  if (menuCloseTimer === null) return;
+  window.clearTimeout(menuCloseTimer);
+  menuCloseTimer = null;
+}
+
+function openFloatingMenu(groupId, event, options = {}) {
+  if (!options.force && !isDesktopHoverNavigation()) return;
+  cancelFloatingMenuClose();
+  positionFloatingMenu(event);
+  expandedGroupId.value = groupId;
+}
+
+function scheduleFloatingMenuClose() {
+  if (!isDesktopHoverNavigation()) return;
+  cancelFloatingMenuClose();
+  menuCloseTimer = window.setTimeout(() => {
+    expandedGroupId.value = "";
+    menuCloseTimer = null;
+  }, 180);
+}
+
+function toggleGroup(groupId, event, options = {}) {
+  if (!options.force && isDesktopHoverNavigation()) return;
+  cancelFloatingMenuClose();
+  if (expandedGroupId.value === groupId) {
+    expandedGroupId.value = "";
+    return;
+  }
+  positionFloatingMenu(event);
+  expandedGroupId.value = groupId;
+}
+
+function closeFloatingMenu() {
+  cancelFloatingMenuClose();
+  expandedGroupId.value = "";
+}
+
+function toggleMobileMenu() {
+  mobileMenu.value = !mobileMenu.value;
+  if (!mobileMenu.value) closeFloatingMenu();
+}
+
+onBeforeUnmount(cancelFloatingMenuClose);
+
+function restoreNavigationState() {
+  let stored = {};
+  try { stored = JSON.parse(window.localStorage.getItem(navigationStorageKey()) || "{}"); }
+  catch { stored = {}; }
+  const restored = sanitizeNavigationState(stored, visibleNavigation.value);
+  openedTabs.value = restored.tabs.map(routeById).filter(Boolean);
+  expandedGroupId.value = restored.expandedGroupId;
+  openRoute(restored.activeId, { addTab: false, persist: false });
+  if (!openedTabs.value.some((tab) => tab.id === activeRouteId.value)) openedTabs.value.push(activeNav.value);
+  restoredUserId.value = currentUser.value?.id || "";
+  persistNavigationState();
+}
+
 async function login() {
   loginForm.busy = true;
   try {
@@ -278,9 +365,15 @@ async function login() {
 }
 
 function logout() {
+  persistNavigationState();
   setToken("");
   token.value = "";
   currentUser.value = null;
+  activeModule.value = "dashboard";
+  activeRouteId.value = "dashboard";
+  expandedGroupId.value = "";
+  openedTabs.value = [];
+  restoredUserId.value = "";
 }
 
 async function hydrate() {
@@ -299,6 +392,8 @@ async function hydrate() {
     logs.value = logData;
     displayModules.value = displayData;
     ipWorkspace.value = ipData;
+    if (restoredUserId.value !== me.id) restoreNavigationState();
+    else if (!routeById(activeRouteId.value)) restoreNavigationState();
   } catch (error) {
     if (error.status === 401) logout();
     notify(error.message, "error");
@@ -308,26 +403,19 @@ async function hydrate() {
 }
 
 function switchModule(id) {
-  activeModule.value = id;
-  editor.open = false;
-  ipEditor.open = false;
-  filters.page = 1;
-  mobileMenu.value = false;
-  if (!openedTabs.value.some((tab) => tab.id === id)) {
-    const item = navItems.find((nav) => nav.id === id);
-    openedTabs.value.push(item);
-  }
+  openRoute(id);
 }
 
 function closeTab(id) {
   if (id === "dashboard") return;
   const index = openedTabs.value.findIndex((tab) => tab.id === id);
   openedTabs.value = openedTabs.value.filter((tab) => tab.id !== id);
-  if (activeModule.value === id) switchModule(openedTabs.value[Math.max(0, index - 1)]?.id || "dashboard");
+  if (activeRouteId.value === id) openRoute(openedTabs.value[Math.max(0, index - 1)]?.id || "dashboard", { addTab: false });
+  else persistNavigationState();
 }
 
 function resetFilters() {
-  Object.assign(filters, { keyword: "", type: "", status: "", channel: "", page: 1 });
+  Object.assign(filters, { keyword: "", type: activeNav.value.assetType || "", status: "", channel: "", page: 1 });
 }
 
 function toggleExpanded(id) {
@@ -343,7 +431,11 @@ function toggleSelected(id) {
 }
 
 function newAsset() {
-  const defaults = activeModule.value === "documents" ? { type: "document", category: "资料资产" } : activeModule.value === "governance" ? { type: "governance", category: "治理资产" } : { type: "case", category: "案例资产" };
+  const defaults = activeModule.value === "documents"
+    ? { type: "document", category: activeNav.value.categories?.[0] || "资料资产" }
+    : activeModule.value === "governance"
+      ? { type: "governance", category: activeNav.value.categories?.[0] || "治理资产" }
+      : { type: activeNav.value.assetType || "case", category: ASSET_TYPE_LABELS[activeNav.value.assetType] || "案例资产" };
   editor.data = { ...defaults, title: "", code: "", summary: "", ownerId: currentUser.value.id, ownerName: currentUser.value.name, departmentId: currentUser.value.departmentId, departmentName: currentUser.value.departmentName, sensitivity: "company", channel: "internal", version: "V0.1", amount: 0, showAmountPublic: false, publicFields: ["summary", "version", "attachments"], featured: false, systemIds: [], attachments: [], audienceTemplates: [], lockVersion: 0 };
   editor.isNew = true;
   editor.open = true;
@@ -599,8 +691,7 @@ async function createBackup() {
 }
 
 function previewPublicPortal() {
-  const portalUrl = import.meta.env.VITE_PORTAL_URL || "http://127.0.0.1:5173/app.html";
-  window.open(`${portalUrl}${portalUrl.includes("?") ? "&" : "?"}portalMode=public`, "_blank", "noopener");
+  openPortalTarget({ mode: "public" });
 }
 
 async function syncHr() {
@@ -790,12 +881,12 @@ onMounted(async () => {
 
   <div v-else class="admin-shell">
     <header class="topbar">
-      <button class="mobile-menu" type="button" aria-label="打开导航" @click="mobileMenu = !mobileMenu"><Menu :size="20" /></button>
-      <div class="top-brand"><img :src="logoUrl" alt="汉脑科技" /><span>无形资产管理</span></div>
+      <button class="mobile-menu" type="button" aria-label="打开导航" @click="toggleMobileMenu"><Menu :size="20" /></button>
+      <div class="top-brand"><span>无形资产</span></div>
       <button class="home-button" type="button" title="返回工作台" @click="switchModule('dashboard')"><Home :size="19" /></button>
       <nav class="workspace-tabs" aria-label="已打开页面">
-        <button v-for="tab in openedTabs" :key="tab.id" :class="{ active: activeModule === tab.id }" type="button" @click="switchModule(tab.id)">
-          <component :is="tab.icon" :size="15" /><span>{{ tab.label }}</span><X v-if="tab.id !== 'dashboard'" :size="14" @click.stop="closeTab(tab.id)" />
+        <button v-for="tab in openedTabs" :key="tab.id" :class="{ active: activeRouteId === tab.id }" type="button" @click="openRoute(tab.id)">
+          <component :is="iconComponent(tab.icon)" :size="15" /><span>{{ tab.label }}</span><X v-if="tab.id !== 'dashboard'" :size="14" @click.stop="closeTab(tab.id)" />
         </button>
       </nav>
       <div class="top-actions">
@@ -808,15 +899,59 @@ onMounted(async () => {
       </div>
     </header>
 
-    <aside class="sidebar" :class="{ open: mobileMenu }">
-      <button v-for="item in navItems" :key="item.id" :class="{ active: activeModule === item.id }" type="button" @click="switchModule(item.id)">
-        <span><component :is="item.icon" :size="22" /></span><em>{{ item.label }}</em>
-        <b v-if="item.id === 'workflow' && reviews.filter(review => review.status === 'pending').length">{{ reviews.filter(review => review.status === 'pending').length }}</b>
-        <b v-if="item.id === 'tasks' && integrations.dispatches.filter(task => task.status === 'failed').length">{{ integrations.dispatches.filter(task => task.status === 'failed').length }}</b>
-        <b v-if="item.id === 'ip' && (ipWorkspace.reminders.filter(reminder => reminder.status === 'open').length + ipWorkspace.migrationIssues.filter(issue => issue.status === 'pending').length)">{{ ipWorkspace.reminders.filter(reminder => reminder.status === 'open').length + ipWorkspace.migrationIssues.filter(issue => issue.status === 'pending').length }}</b>
-      </button>
+    <aside class="sidebar" :class="{ open: mobileMenu }" @pointerleave="scheduleFloatingMenuClose">
+      <div class="sidebar-menu">
+        <template v-for="group in visibleNavigation" :key="group.id">
+          <button
+            v-if="group.standalone"
+            class="sidebar-home"
+            :class="{ active: group.children.some((item) => item.id === activeRouteId) }"
+            type="button"
+            @pointerenter="closeFloatingMenu"
+            @focus="closeFloatingMenu"
+            @click="openRoute(group.children[0].id)"
+          >
+            <span><component :is="iconComponent(group.icon)" :size="18" /></span><em>{{ group.label }}</em>
+          </button>
+          <button
+            v-else
+            class="nav-group-trigger"
+            :class="{ expanded: expandedGroupId === group.id, active: activeGroup?.id === group.id }"
+            type="button"
+            :aria-expanded="expandedGroupId === group.id"
+            :aria-controls="`nav-group-${group.id}`"
+            @pointerenter="openFloatingMenu(group.id, $event)"
+            @keydown.enter.space.prevent="toggleGroup(group.id, $event, { force: true })"
+            @click="toggleGroup(group.id, $event)"
+          >
+            <span><component :is="iconComponent(group.icon)" :size="23" /></span><em>{{ group.label }}</em>
+            <b v-if="groupBadgeCount(group)">{{ groupBadgeCount(group) }}</b>
+          </button>
+        </template>
+      </div>
+      <div class="sidebar-brand" @pointerenter="closeFloatingMenu">
+        <img :src="sidebarLogoUrl" alt="汉脑科技" />
+      </div>
     </aside>
-    <button v-if="mobileMenu" class="mobile-scrim" type="button" aria-label="关闭导航" @click="mobileMenu = false"></button>
+    <button v-if="expandedGroup" class="mega-menu-scrim" type="button" aria-label="关闭功能菜单" @click="closeFloatingMenu"></button>
+    <Transition name="mega-menu">
+      <section
+        v-if="expandedGroup"
+        :id="`nav-group-${expandedGroup.id}`"
+        class="mega-menu-panel"
+        :style="{ top: `${menuPanelTop}px` }"
+        @pointerenter="cancelFloatingMenuClose"
+        @pointerleave="scheduleFloatingMenuClose"
+      >
+        <article v-for="column in expandedGroup.columns" :key="column.label" class="mega-menu-column">
+          <header><span><component :is="iconComponent(column.icon)" :size="22" /></span><h2>{{ column.label }}</h2></header>
+          <button v-for="item in column.items" :key="item.id" :class="{ active: activeRouteId === item.id }" type="button" @click="openRoute(item.id)">
+            <component :is="iconComponent(item.icon)" :size="16" /><span>{{ item.label }}</span><b v-if="badgeCount(item)">{{ badgeCount(item) }}</b>
+          </button>
+        </article>
+      </section>
+    </Transition>
+    <button v-if="mobileMenu" class="mobile-scrim" type="button" aria-label="关闭导航" @click="toggleMobileMenu"></button>
 
     <main class="workspace">
       <template v-if="ipEditor.open">
@@ -989,86 +1124,40 @@ onMounted(async () => {
       </template>
 
       <template v-else>
-        <header class="page-header">
-          <div><span>{{ activeNav.label }}</span><h1>{{ activeNav.label }}</h1></div>
+        <header v-if="activeModule !== 'dashboard'" class="page-header">
+          <div><span>{{ activeNav.groupLabel }} / {{ activeNav.label }}</span><h1>{{ activeNav.label }}</h1></div>
           <div class="page-header-actions">
-            <button v-if="activeModule === 'organization'" type="button" @click="syncHr"><RefreshCw :size="17" />同步达铃</button>
-            <button v-if="activeModule === 'workflow'" class="primary" type="button" @click="openRelease"><Send :size="17" />发布版本</button>
+            <button v-if="activeModule === 'organization' && organizationSection === 'sync'" type="button" @click="syncHr"><RefreshCw :size="17" />同步达铃</button>
+            <button v-if="activeModule === 'workflow' && workflowSection === 'releases'" class="primary" type="button" @click="openRelease"><Send :size="17" />发布版本</button>
             <button v-if="activeModule === 'ip'" type="button" @click="exportIpAssets"><Download :size="17" />导出台账</button>
             <button v-if="activeModule === 'ip'" class="primary" type="button" @click="newIpAsset('patent')"><Plus :size="17" />新增知识产权</button>
             <button v-if="['assets','documents','governance'].includes(activeModule)" class="primary" type="button" @click="newAsset"><Plus :size="17" />新增资产</button>
           </div>
         </header>
 
-        <section v-if="activeModule === 'dashboard'" class="dashboard-view dashboard-cube">
-          <div class="dashboard-overview-bar">
-            <div><b>无形资产治理总览</b><span>资产、知识产权、发布、权限和系统协同的统一运行视图</span></div>
-            <div><span>当前版本</span><b>{{ organization.settings.currentVersion || 'v1.0.3' }}</b><i></i><span>最近组织同步</span><b>{{ formatDate(organization.settings.lastHrSyncAt) }}</b></div>
-          </div>
+        <DashboardView
+          v-if="activeModule === 'dashboard'"
+          :dashboard="dashboard"
+          :version="organization.settings?.currentVersion || 'v1.0.3'"
+          @navigate="openRoute"
+        />
 
-          <div class="dashboard-metric-grid">
-            <button class="metric-blue" type="button" @click="switchModule('assets')"><span><IconFont name="assets" :size="25" /></span><div><small>资产总数</small><strong>{{ dashboard.metrics.totalAssets || assets.length }}</strong><em>全模块在册</em></div><i>较上次发布稳定</i></button>
-            <button class="metric-green" type="button" @click="switchModule('assets')"><span><IconFont name="publish" :size="25" /></span><div><small>已发布资产</small><strong>{{ dashboardPublishedCount }}</strong><em>可进入消费端</em></div><i>{{ assets.length ? Math.round(dashboardPublishedCount / assets.length * 100) : 0 }}% 在册占比</i></button>
-            <button class="metric-amber" type="button" @click="switchModule('workflow')"><span><IconFont name="review" :size="25" /></span><div><small>待审核内容</small><strong>{{ dashboard.metrics.pendingReviews || 0 }}</strong><em>等待模块评审</em></div><i>{{ reviews.filter(item => item.status === 'approved').length }} 项已通过</i></button>
-            <button class="metric-cyan" type="button" @click="switchModule('display')"><span><IconFont name="public" :size="25" /></span><div><small>公开覆盖率</small><strong>{{ dashboardPublicCoverage }}<sup>%</sup></strong><em>{{ dashboard.metrics.publicAssets || 0 }} 项对外展示</em></div><i>金额与附件逐项控制</i></button>
-            <button class="metric-violet" type="button" @click="switchModule('ip')"><span><IconFont name="ip" :size="25" /></span><div><small>知识产权</small><strong>{{ ipWorkspace.metrics.total || 0 }}</strong><em>{{ ipWorkspace.metrics.patents || 0 }} 专利 / {{ ipWorkspace.metrics.copyrights || 0 }} 软著</em></div><i>{{ ipWorkspace.metrics.obtained || 0 }} 项已获得</i></button>
-            <button class="metric-red" type="button" @click="switchModule('tasks')"><span><IconFont name="risk" :size="25" /></span><div><small>治理待处理</small><strong>{{ dashboardRiskCount }}</strong><em>审核、期限与异常</em></div><i>{{ dashboard.metrics.taskFailures || 0 }} 项系统异常</i></button>
-          </div>
-
-          <div class="dashboard-chart-grid">
-            <section class="dashboard-panel trend-chart-panel">
-              <header><div><IconFont name="trend" :size="18" /><h2>近 7 日资产活跃趋势</h2></div><span>内容维护、访问下载与系统协同</span></header>
-              <ChartCubeChart class="trend-chart" variant="line" :data="dashboardTrendData" :colors="['#246bfd', '#14b87a', '#ff8a34']" />
-            </section>
-            <section class="dashboard-panel status-chart-panel">
-              <header><div><IconFont name="distribution" :size="18" /><h2>资产状态构成</h2></div><span>当前在册</span></header>
-              <div class="donut-layout"><div class="donut-chart-wrap"><ChartCubeChart variant="donut" :data="dashboardStatusData" :colors="dashboardChartColors" /><div><strong>{{ assets.length }}</strong><span>资产总数</span></div></div><div class="chart-legend"><div v-for="(item, index) in dashboardStatusData" :key="item.name"><i :style="{ background: dashboardChartColors[index % dashboardChartColors.length] }"></i><span>{{ item.name }}</span><b>{{ item.value }}</b><em>{{ assets.length ? (item.value / assets.length * 100).toFixed(1) : 0 }}%</em></div></div></div>
-            </section>
-            <section class="dashboard-panel department-chart-panel">
-              <header><div><IconFont name="department" :size="18" /><h2>部门资产贡献</h2></div><span>按负责部门统计</span></header>
-              <ChartCubeChart class="department-chart" variant="bar" :data="dashboardDepartmentData" :colors="dashboardChartColors" />
-            </section>
-          </div>
-
-          <div class="dashboard-governance-grid">
-            <section class="dashboard-panel risk-panel">
-              <header><div><IconFont name="risk" :size="18" /><h2>重点治理风险</h2></div><button type="button" @click="switchModule('tasks')">查看全部<ChevronRight :size="15" /></button></header>
-              <div class="risk-list"><button v-for="item in dashboardRiskItems" :key="item.label" type="button" @click="switchModule(item.module)"><span :class="item.tone"><IconFont :name="item.label === '期限提醒' ? 'ip' : item.label === '待确认绑定' ? 'department' : item.label === '任务异常' ? 'system' : 'review'" :size="18" /></span><div><b>{{ item.label }}</b><small>{{ item.note }}</small></div><strong>{{ item.value }}<em>{{ item.unit }}</em></strong><ChevronRight :size="15" /></button></div>
-            </section>
-            <section class="dashboard-panel deadline-panel">
-              <header><div><IconFont name="ip" :size="18" /><h2>知识产权期限</h2></div><button type="button" @click="switchModule('ip')">期限台账<ChevronRight :size="15" /></button></header>
-              <div class="deadline-list"><div v-for="item in dashboardIpDeadlines" :key="item.id"><span :class="item.status === 'open' ? 'warning' : 'neutral'">{{ item.type === 'annual_fee' ? '年费' : item.type === 'expiry' ? '期限' : '复核' }}</span><div><b>{{ item.ipAssetTitle || item.title || '知识产权事项' }}</b><small>{{ item.ownerName || '待分配负责人' }} · {{ formatDate(item.dueDate || item.dueAt || item.remindAt, false) }}</small></div><em :class="`status ${item.status === 'open' ? 'warning' : 'neutral'}`">{{ item.status === 'open' ? '待处理' : '已计划' }}</em></div><div v-if="!dashboardIpDeadlines.length" class="empty-row compact-row">暂无近期知识产权期限事项</div></div>
-            </section>
-            <section class="dashboard-panel system-health-panel">
-              <header><div><IconFont name="system" :size="18" /><h2>开放系统状态</h2></div><button type="button" @click="switchModule('integrations')">系统开放<ChevronRight :size="15" /></button></header>
-              <div class="system-health-list"><div v-for="system in integrations.systems" :key="system.id"><span><IconFont name="system" :size="18" /></span><div><b>{{ system.name }}</b><small>{{ system.code }} · {{ formatDate(system.lastCheckedAt) }}</small></div><em :class="`status ${statusTone(system.status)}`">{{ system.status === 'active' ? '连接正常' : '需要检查' }}</em></div><div v-if="!integrations.systems.length" class="empty-row compact-row">尚未登记公司系统</div></div>
-            </section>
-          </div>
-
-          <div class="dashboard-bottom-grid">
-            <section class="dashboard-panel todo-panel">
-              <header><div><IconFont name="todo" :size="18" /><h2>待办事项</h2></div><span>按优先级汇总审核、期限和系统任务</span></header>
-              <div class="dashboard-todo-table"><div class="todo-head"><span>事项类型</span><span>事项内容</span><span>负责人</span><span>计划时间</span><span>优先级</span><span>状态</span><span>操作</span></div><div v-for="item in dashboardTodos" :key="item.id"><span>{{ item.kind }}</span><b>{{ item.title }}</b><span>{{ item.owner }}</span><time>{{ formatDate(item.time) }}</time><em :class="item.priority === '高' ? 'high' : 'medium'">{{ item.priority }}</em><span>{{ item.status }}</span><button type="button" @click="switchModule(item.module)">处理</button></div><div v-if="!dashboardTodos.length" class="empty-row compact-row">当前没有待处理事项</div></div>
-            </section>
-            <section class="dashboard-panel quick-panel">
-              <header><div><IconFont name="quick" :size="18" /><h2>快捷入口</h2></div><span>常用维护入口</span></header>
-              <div class="quick-entry-grid"><button v-for="item in dashboardQuickEntries" :key="item.label" type="button" @click="switchModule(item.module)"><span><IconFont :name="item.icon" :size="22" /></span><b>{{ item.label }}</b><small>{{ item.note }}</small></button></div>
-            </section>
-          </div>
-        </section>
+        <FlowNavigator
+          v-else-if="activeModule === 'flow'"
+          :accessible-route-ids="accessibleRouteIds"
+          :portal-base-url="portalBaseUrl"
+          @navigate="openRoute"
+          @blocked="notify($event, 'error')"
+        />
 
         <section v-else-if="activeModule === 'ip'" class="ip-workspace-view">
-          <nav class="ip-subnav">
-            <button v-for="item in [['overview','总览'],['patents','专利台账'],['copyrights','软著台账'],['deadlines','期限与年费'],['versions','版本记录'],['relations','关联资产'],['migration','待确认绑定']]" :key="item[0]" :class="{ active: ipSection === item[0] }" type="button" @click="ipSection = item[0]">{{ item[1] }}<b v-if="item[0] === 'deadlines' && ipWorkspace.reminders.filter(reminder => reminder.status === 'open').length">{{ ipWorkspace.reminders.filter(reminder => reminder.status === 'open').length }}</b><b v-if="item[0] === 'migration' && ipWorkspace.migrationIssues.filter(issue => issue.status === 'pending').length">{{ ipWorkspace.migrationIssues.filter(issue => issue.status === 'pending').length }}</b></button>
-          </nav>
-
           <div v-if="ipSection === 'overview'" class="ip-metric-grid">
-            <button type="button" @click="ipSection = 'patents'"><Scale :size="20" /><span>专利</span><strong>{{ ipWorkspace.metrics.patents || 0 }}</strong><small>在册档案</small></button>
-            <button type="button" @click="ipSection = 'copyrights'"><Copyright :size="20" /><span>软件著作权</span><strong>{{ ipWorkspace.metrics.copyrights || 0 }}</strong><small>登记档案</small></button>
+            <button type="button" @click="openRoute('ip.patents')"><Scale :size="20" /><span>专利</span><strong>{{ ipWorkspace.metrics.patents || 0 }}</strong><small>在册档案</small></button>
+            <button type="button" @click="openRoute('ip.copyrights')"><Copyright :size="20" /><span>软件著作权</span><strong>{{ ipWorkspace.metrics.copyrights || 0 }}</strong><small>登记档案</small></button>
             <button type="button"><Clock3 :size="20" /><span>申请与审查中</span><strong>{{ ipWorkspace.metrics.applying || 0 }}</strong><small>持续跟进</small></button>
             <button type="button"><CircleCheck :size="20" /><span>已获得</span><strong>{{ ipWorkspace.metrics.obtained || 0 }}</strong><small>授权或登记</small></button>
-            <button type="button" @click="ipSection = 'deadlines'"><AlertTriangle :size="20" /><span>180天内到期</span><strong>{{ ipWorkspace.metrics.expiring || 0 }}</strong><small>期限风险</small></button>
-            <button type="button" @click="ipSection = 'deadlines'"><Bell :size="20" /><span>年费待处理</span><strong>{{ ipWorkspace.metrics.annualFees || 0 }}</strong><small>已生成任务</small></button>
+            <button type="button" @click="openRoute('ip.deadlines')"><AlertTriangle :size="20" /><span>180天内到期</span><strong>{{ ipWorkspace.metrics.expiring || 0 }}</strong><small>期限风险</small></button>
+            <button type="button" @click="openRoute('ip.deadlines')"><Bell :size="20" /><span>年费待处理</span><strong>{{ ipWorkspace.metrics.annualFees || 0 }}</strong><small>已生成任务</small></button>
             <button type="button"><Paperclip :size="20" /><span>资料缺失</span><strong>{{ ipWorkspace.metrics.missingDocuments || 0 }}</strong><small>无证书材料</small></button>
           </div>
 
@@ -1089,7 +1178,7 @@ onMounted(async () => {
         <section v-else-if="['assets','documents','governance'].includes(activeModule)" class="list-view">
           <div class="filter-bar">
             <label><span>关键字</span><div><Search :size="16" /><input v-model="filters.keyword" placeholder="资产名称 / 编号 / 负责人" @keyup.enter="filters.page = 1" /></div></label>
-            <label><span>资产类型</span><select v-model="filters.type"><option value="">全部类型</option><option v-for="item in assetTypeOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select></label>
+            <label><span>资产类型</span><select v-model="filters.type" :disabled="Boolean(activeNav.assetType)"><option value="">全部类型</option><option v-for="item in assetTypeOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select></label>
             <label><span>处理状态</span><select v-model="filters.status"><option value="">全部状态</option><option v-for="item in statusOptions" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select></label>
             <label><span>发布渠道</span><select v-model="filters.channel"><option value="">全部渠道</option><option value="internal">仅内部</option><option value="both">内部并公开</option></select></label>
             <div class="filter-actions"><button class="primary" type="button" @click="filters.page = 1"><Search :size="16" />查询</button><button type="button" title="重置条件" @click="resetFilters"><RotateCcw :size="16" />重置</button><button type="button"><SlidersHorizontal :size="16" />高级查询</button></div>
@@ -1108,27 +1197,32 @@ onMounted(async () => {
 
         <section v-else-if="activeModule === 'workflow'" class="workflow-view">
           <div class="workflow-summary"><div><span><Clock3 :size="20" /></span><b>{{ reviews.filter(item => item.status === 'pending').length }}</b><small>待审核</small></div><div><span><CircleCheck :size="20" /></span><b>{{ reviews.filter(item => item.status === 'approved').length }}</b><small>已通过</small></div><div><span><CircleX :size="20" /></span><b>{{ reviews.filter(item => item.status === 'rejected').length }}</b><small>已驳回</small></div><div><span><Send :size="20" /></span><b>{{ releases.length }}</b><small>发布版本</small></div></div>
-          <section class="work-panel review-queue"><header><div><h2>内容审核队列</h2><span>通过后自动创建目标系统项目任务</span></div></header><div class="review-table"><div class="review-table-head"><span>资产内容</span><span>提交人</span><span>审核人</span><span>提交时间</span><span>状态</span><span>操作</span></div><div v-for="review in reviews" :key="review.id"><div><b>{{ review.assetTitle }}</b><small>{{ review.revisionId }}</small></div><span>{{ review.submitterName }}</span><span>{{ review.reviewerName }}</span><span>{{ formatDate(review.submittedAt) }}</span><em :class="`status ${statusTone(review.status)}`">{{ review.status === 'pending' ? '待审核' : review.status === 'approved' ? '已通过' : '已驳回' }}</em><div class="row-actions"><button v-if="review.status === 'pending'" class="approve" type="button" @click="openDecision(review, 'approve')"><Check :size="16" />通过</button><button v-if="review.status === 'pending'" type="button" @click="openDecision(review, 'reject')"><X :size="16" />驳回</button><button v-else type="button"><Eye :size="16" />详情</button></div></div></div></section>
-          <section class="work-panel release-list"><header><div><h2>发布版本</h2><span>内部与公开双渠道快照</span></div></header><div class="release-row" v-for="release in releases" :key="release.id"><span><GitPullRequest :size="19" /></span><div><b>{{ release.version }} · {{ release.title }}</b><small>{{ release.publisherName }} · {{ formatDate(release.publishedAt) }}</small></div><strong>{{ release.assetCount }} 内部 / {{ release.publicAssetCount }} 公开</strong><em :class="`status ${statusTone(release.status)}`">{{ release.status === 'published' ? '已发布' : release.status === 'rolled_back' ? '已回滚' : release.status }}</em><button type="button" @click="downloadPublicPackage"><Download :size="16" />公开包</button><button v-if="release.version !== organization.settings.currentVersion && release.stateSnapshotPath" type="button" @click="rollbackRelease(release)"><RotateCcw :size="16" />回滚</button></div></section>
+          <section v-if="workflowSection === 'reviews'" class="work-panel review-queue"><header><div><h2>内容审核队列</h2><span>通过后自动创建目标系统项目任务</span></div></header><div class="review-table"><div class="review-table-head"><span>资产内容</span><span>提交人</span><span>审核人</span><span>提交时间</span><span>状态</span><span>操作</span></div><div v-for="review in reviews" :key="review.id"><div><b>{{ review.assetTitle }}</b><small>{{ review.revisionId }}</small></div><span>{{ review.submitterName }}</span><span>{{ review.reviewerName }}</span><span>{{ formatDate(review.submittedAt) }}</span><em :class="`status ${statusTone(review.status)}`">{{ review.status === 'pending' ? '待审核' : review.status === 'approved' ? '已通过' : '已驳回' }}</em><div class="row-actions"><button v-if="review.status === 'pending'" class="approve" type="button" @click="openDecision(review, 'approve')"><Check :size="16" />通过</button><button v-if="review.status === 'pending'" type="button" @click="openDecision(review, 'reject')"><X :size="16" />驳回</button><button v-else type="button"><Eye :size="16" />详情</button></div></div></div></section>
+          <section v-if="workflowSection === 'releases'" class="work-panel release-list"><header><div><h2>发布版本</h2><span>内部与公开双渠道快照</span></div></header><div class="release-row" v-for="release in releases" :key="release.id"><span><GitPullRequest :size="19" /></span><div><b>{{ release.version }} · {{ release.title }}</b><small>{{ release.publisherName }} · {{ formatDate(release.publishedAt) }}</small></div><strong>{{ release.assetCount }} 内部 / {{ release.publicAssetCount }} 公开</strong><em :class="`status ${statusTone(release.status)}`">{{ release.status === 'published' ? '已发布' : release.status === 'rolled_back' ? '已回滚' : release.status }}</em><button type="button" @click="downloadPublicPackage"><Download :size="16" />公开包</button><button v-if="release.version !== organization.settings.currentVersion && release.stateSnapshotPath" type="button" @click="rollbackRelease(release)"><RotateCcw :size="16" />回滚</button></div></section>
         </section>
 
         <section v-else-if="activeModule === 'organization'" class="organization-view">
           <div class="org-summary"><div><Building2 :size="22" /><b>{{ organization.departments.length }}</b><span>组织部门</span></div><div><Users :size="22" /><b>{{ organization.users.length }}</b><span>同步人员</span></div><div><ShieldCheck :size="22" /><b>{{ organization.mappings.length }}</b><span>编码映射</span></div><div><RefreshCw :size="22" /><b>{{ formatDate(organization.settings.lastHrSyncAt) }}</b><span>最近同步</span></div></div>
-          <div class="org-layout"><section class="work-panel"><header><div><h2>达铃组织人员</h2><span>手机号用于登录，达铃ID用于永久关联</span></div></header><div class="people-table"><div class="people-head"><span>员工</span><span>部门 / 岗位</span><span>达铃编码</span><span>工作台角色</span><span>状态</span></div><div v-for="person in organization.users" :key="person.id"><div><span class="avatar">{{ person.name.slice(0, 1) }}</span><b>{{ person.name }}<small>{{ person.phone }}</small></b></div><span>{{ person.departmentName }}<small>{{ person.position }}</small></span><span>{{ person.employeeCode }}<small>{{ person.dalingId }}</small></span><span>{{ person.roleCodes.join('、') }}</span><em :class="`status ${statusTone(person.status)}`">{{ person.status === 'active' ? '在职' : '停用' }}</em></div></div></section><section class="work-panel mapping-panel"><header><div><h2>权限编码映射</h2><span>达铃编码生成个人最终权限</span></div></header><div class="mapping-list"><div v-for="mapping in organization.mappings" :key="mapping.id"><span><KeyRound :size="17" /></span><div><b>{{ mapping.sourceCode }}</b><small>{{ mapping.sourceType }} · {{ mapping.dataScope }}</small></div><em>{{ mapping.targetRole }}</em><i :class="{ active: mapping.enabled }"></i></div></div><footer><span>下次权限复核</span><b>{{ formatDate(organization.settings.nextAccessReviewAt, false) }}</b></footer></section></div>
+          <section v-if="organizationSection === 'sync'" class="work-panel organization-sync-panel">
+            <header><div><h2>达铃组织同步</h2><span>全量 API 与人员变更回调共同维护组织数据</span></div></header>
+            <div class="sync-overview"><div><RefreshCw :size="20" /><span>同步方式</span><b>全量 API + 变更回调</b></div><div><Users :size="20" /><span>永久关联键</span><b>达铃员工 ID</b></div><div><Smartphone :size="20" /><span>登录账号</span><b>员工手机号</b></div><div><Clock3 :size="20" /><span>最近同步</span><b>{{ formatDate(organization.settings.lastHrSyncAt) }}</b></div></div>
+          </section>
+          <section v-if="organizationSection === 'people'" class="work-panel"><header><div><h2>部门与人员</h2><span>手机号用于登录，达铃 ID 用于永久关联</span></div></header><div class="people-table"><div class="people-head"><span>员工</span><span>部门 / 岗位</span><span>达铃编码</span><span>工作台角色</span><span>状态</span></div><div v-for="person in organization.users" :key="person.id"><div><span class="avatar">{{ person.name.slice(0, 1) }}</span><b>{{ person.name }}<small>{{ person.phone }}</small></b></div><span>{{ person.departmentName }}<small>{{ person.position }}</small></span><span>{{ person.employeeCode }}<small>{{ person.dalingId }}</small></span><span>{{ person.roleCodes.join('、') }}</span><em :class="`status ${statusTone(person.status)}`">{{ person.status === 'active' ? '在职' : '停用' }}</em></div></div></section>
+          <section v-if="organizationSection === 'mappings'" class="work-panel mapping-panel"><header><div><h2>岗位与权限编码映射</h2><span>达铃稳定编码生成个人最终权限</span></div></header><div class="mapping-list"><div v-for="mapping in organization.mappings" :key="mapping.id"><span><KeyRound :size="17" /></span><div><b>{{ mapping.sourceCode }}</b><small>{{ mapping.sourceType }} · {{ mapping.dataScope }}</small></div><em>{{ mapping.targetRole }}</em><i :class="{ active: mapping.enabled }"></i></div></div></section>
+          <section v-if="organizationSection === 'review'" class="work-panel access-review-panel"><header><div><h2>权限复核</h2><span>人员、部门和系统权限每半年复核一次</span></div></header><div><ShieldCheck :size="38" /><span>下次复核时间</span><strong>{{ formatDate(organization.settings.nextAccessReviewAt, false) }}</strong><p>逾期后向模块审核人和管理员升级提醒，人员调岗或停用时立即重算最终个人权限。</p></div></section>
         </section>
 
         <section v-else-if="activeModule === 'integrations'" class="integration-view">
-          <div class="system-grid"><article v-for="system in integrations.systems" :key="system.id"><header><span><Server :size="21" /></span><em :class="`status ${statusTone(system.status)}`">{{ system.status === 'active' ? '连接正常' : '需要检查' }}</em></header><h2>{{ system.name }}</h2><p>{{ system.code }} · {{ system.baseUrl }}</p><dl><div><dt>任务模板</dt><dd>{{ integrations.templates.find(item => item.id === system.taskTemplateId)?.name }}</dd></div><div><dt>客户端凭据</dt><dd>{{ system.credentialHint }}</dd></div><div><dt>最近检查</dt><dd>{{ formatDate(system.lastCheckedAt) }}</dd></div></dl><footer><button type="button" @click="testSystem(system)"><Activity :size="16" />连接测试</button><button type="button" @click="openDetail(`${system.name} · 连接配置`, system)"><Pencil :size="16" />配置</button></footer></article><button class="new-system" type="button" @click="openDetail('登记公司系统', { note: '生产环境登记需配置系统编码、客户端凭据、IP白名单和任务模板版本。' })"><Plus :size="24" /><b>登记公司系统</b></button></div>
-          <section class="work-panel template-panel"><header><div><h2>项目任务映射模板</h2><span>每个目标系统独立配置</span></div></header><div class="template-table"><div><b>模板名称</b><b>目标系统</b><b>项目编码</b><b>任务类型</b><b>版本</b><b>状态</b></div><div v-for="template in integrations.templates" :key="template.id"><span>{{ template.name }}</span><span>{{ integrations.systems.find(system => system.id === template.systemId)?.name }}</span><span>{{ template.projectCode }}</span><span>{{ template.taskType }}</span><span>V{{ template.version }}</span><em :class="`status ${template.enabled ? 'success' : 'neutral'}`">{{ template.enabled ? '已启用' : '停用' }}</em></div></div></section>
+          <div v-if="integrationSection === 'systems'" class="system-grid"><article v-for="system in integrations.systems" :key="system.id"><header><span><Server :size="21" /></span><em :class="`status ${statusTone(system.status)}`">{{ system.status === 'active' ? '连接正常' : '需要检查' }}</em></header><h2>{{ system.name }}</h2><p>{{ system.code }} · {{ system.baseUrl }}</p><dl><div><dt>任务模板</dt><dd>{{ integrations.templates.find(item => item.id === system.taskTemplateId)?.name }}</dd></div><div><dt>客户端凭据</dt><dd>{{ system.credentialHint }}</dd></div><div><dt>最近检查</dt><dd>{{ formatDate(system.lastCheckedAt) }}</dd></div></dl><footer><button type="button" @click="testSystem(system)"><Activity :size="16" />连接测试</button><button type="button" @click="openDetail(`${system.name} · 连接配置`, system)"><Pencil :size="16" />配置</button></footer></article><button class="new-system" type="button" @click="openDetail('登记公司系统', { note: '生产环境登记需配置系统编码、客户端凭据、IP白名单和任务模板版本。' })"><Plus :size="24" /><b>登记公司系统</b></button></div>
+          <section v-if="integrationSection === 'templates'" class="work-panel template-panel"><header><div><h2>项目任务映射模板</h2><span>每个目标系统独立配置</span></div></header><div class="template-table"><div><b>模板名称</b><b>目标系统</b><b>项目编码</b><b>任务类型</b><b>版本</b><b>状态</b></div><div v-for="template in integrations.templates" :key="template.id"><span>{{ template.name }}</span><span>{{ integrations.systems.find(system => system.id === template.systemId)?.name }}</span><span>{{ template.projectCode }}</span><span>{{ template.taskType }}</span><span>V{{ template.version }}</span><em :class="`status ${template.enabled ? 'success' : 'neutral'}`">{{ template.enabled ? '已启用' : '停用' }}</em></div></div></section>
         </section>
 
         <section v-else-if="activeModule === 'tasks'" class="tasks-view">
           <div class="task-stats"><div><CircleCheck :size="20" /><b>{{ integrations.dispatches.filter(item => item.status === 'created').length }}</b><span>创建成功</span></div><div><RefreshCw :size="20" /><b>{{ integrations.dispatches.filter(item => item.status === 'retrying').length }}</b><span>自动重试</span></div><div><AlertTriangle :size="20" /><b>{{ integrations.dispatches.filter(item => item.status === 'failed').length }}</b><span>人工处理</span></div><div><Archive :size="20" /><b>{{ integrations.dispatches.filter(item => item.status === 'invalidated').length }}</b><span>作废通知</span></div></div>
-          <section class="work-panel task-list"><header><div><h2>系统项目任务</h2><span>每个资产修订、每个目标系统独立建单</span></div></header><div class="task-table"><div class="task-head"><span>资产 / 修订</span><span>目标系统</span><span>目标任务</span><span>尝试次数</span><span>更新时间</span><span>状态</span><span>操作</span></div><div v-for="task in integrations.dispatches" :key="task.id"><div><b>{{ task.assetTitle }}</b><small>{{ task.revisionId }}</small></div><span>{{ task.systemName }}</span><span><a v-if="task.externalUrl" :href="task.externalUrl" target="_blank">{{ task.externalTaskId }}<ExternalLink :size="13" /></a><small v-else>{{ task.error || '等待创建' }}</small></span><span>{{ task.attempt }} / 5</span><span>{{ formatDate(task.updatedAt) }}</span><em :class="`status ${statusTone(task.status)}`">{{ task.status === 'created' ? '已创建' : task.status === 'failed' ? '失败' : task.status === 'invalidated' ? '已作废' : '重试中' }}</em><div><button v-if="task.status === 'failed'" type="button" @click="retryTask(task)"><RefreshCw :size="16" />重试</button><button v-else type="button" @click="openDetail(`${task.assetTitle} · 任务详情`, task)"><Eye :size="16" />详情</button></div></div></div></section>
+          <section class="work-panel task-list"><header><div><h2>{{ activeRouteId === 'tasks.exceptions' ? '异常任务处理' : '系统项目任务' }}</h2><span>每个资产修订、每个目标系统独立建单</span></div></header><div class="task-table"><div class="task-head"><span>资产 / 修订</span><span>目标系统</span><span>目标任务</span><span>尝试次数</span><span>更新时间</span><span>状态</span><span>操作</span></div><div v-for="task in filteredTasks" :key="task.id"><div><b>{{ task.assetTitle }}</b><small>{{ task.revisionId }}</small></div><span>{{ task.systemName }}</span><span><a v-if="task.externalUrl" :href="task.externalUrl" target="_blank">{{ task.externalTaskId }}<ExternalLink :size="13" /></a><small v-else>{{ task.error || '等待创建' }}</small></span><span>{{ task.attempt }} / 5</span><span>{{ formatDate(task.updatedAt) }}</span><em :class="`status ${statusTone(task.status)}`">{{ task.status === 'created' ? '已创建' : task.status === 'failed' ? '失败' : task.status === 'invalidated' ? '已作废' : '重试中' }}</em><div><button v-if="task.status === 'failed'" type="button" @click="retryTask(task)"><RefreshCw :size="16" />重试</button><button v-else type="button" @click="openDetail(`${task.assetTitle} · 任务详情`, task)"><Eye :size="16" />详情</button></div></div><div v-if="!filteredTasks.length" class="empty-state"><CircleCheck :size="32" /><b>当前没有符合条件的系统任务</b></div></div></section>
         </section>
 
         <section v-else-if="activeModule === 'logs'" class="logs-view">
-          <div class="log-tabs"><button v-for="item in [['','全部日志'],['login','登录日志'],['operation','操作日志'],['permission','权限日志'],['portal','访问日志'],['download','下载日志'],['system','系统调用'],['task','任务日志']]" :key="item[0]" :class="{ active: logKind === item[0] }" type="button" @click="logKind = item[0]">{{ item[1] }}</button></div>
           <div class="filter-bar compact-filter"><label><span>操作人员</span><div><Search :size="16" /><input v-model="logFilters.keyword" placeholder="姓名 / 部门" /></div></label><label><span>发生时间</span><input v-model="logFilters.date" type="date" /></label><div class="filter-actions"><button class="primary" type="button"><Search :size="16" />查询</button><button type="button" @click="exportLogs"><Download :size="16" />权限内导出</button></div></div>
           <div class="log-table"><div class="log-head"><span>时间</span><span>类型</span><span>操作人 / 部门</span><span>行为</span><span>对象</span><span>来源</span><span>结果</span><span>详情</span></div><div v-for="log in filteredLogs.slice(0, 50)" :key="log.id"><span>{{ formatDate(log.createdAt) }}</span><span>{{ log.kind }}</span><span>{{ log.actorName }}<small>{{ log.departmentName }}</small></span><b>{{ log.action }}</b><span>{{ log.targetName }}</span><span>{{ log.ip }}<small>{{ log.device }}</small></span><em :class="`status ${statusTone(log.result)}`">{{ log.result === 'success' ? '成功' : log.result === 'denied' ? '拒绝' : '失败' }}</em><button type="button" title="查看详情" @click="openDetail(`${log.action} · 审计详情`, log)"><Eye :size="16" /></button></div></div>
         </section>
@@ -1140,8 +1234,8 @@ onMounted(async () => {
         </section>
 
         <section v-else class="settings-view">
-          <div class="settings-section"><header><h2>运行服务</h2><span>本地开发环境</span></header><div class="service-list"><div><span class="service-icon"><Database :size="20" /></span><div><b>数据持久化</b><small>{{ organization.settings.dataDriver === 'postgres' ? 'PostgreSQL' : '本地文件适配器' }}</small></div><em class="status success">正常</em></div><div><span class="service-icon"><FolderArchive :size="20" /></span><div><b>文件存储</b><small>{{ organization.settings.storageDriver === 'minio' ? 'MinIO对象存储' : '本地文件适配器' }}</small></div><em class="status success">正常</em></div><div><span class="service-icon"><RefreshCw :size="20" /></span><div><b>达铃组织同步</b><small>模拟全量API + 变更回调</small></div><em class="status success">正常</em></div><div><span class="service-icon"><Activity :size="20" /></span><div><b>公网匿名采集</b><small>独立白名单事件服务</small></div><em class="status warning">本地模拟</em></div></div></div>
-          <div class="settings-grid"><section><header><h2>备份策略</h2><button type="button" @click="createBackup"><RefreshCw :size="16" />立即备份</button></header><dl><div><dt>日备份</dt><dd>保留30天</dd></div><div><dt>月备份</dt><dd>保留12个月</dd></div><div><dt>恢复演练</dt><dd>每季度</dd></div><div><dt>最近验证</dt><dd>{{ organization.settings.lastBackupAt ? formatDate(organization.settings.lastBackupAt) : '待首次执行' }}</dd></div></dl></section><section><header><h2>日志保留</h2></header><dl><div><dt>安全审计</dt><dd>5年</dd></div><div><dt>行为明细</dt><dd>1年</dd></div><div><dt>过期处理</dt><dd>汇总归档</dd></div><div><dt>记录模式</dt><dd>只追加</dd></div></dl></section><section><header><h2>文件安全</h2></header><dl><div><dt>机密预览</dt><dd>动态水印</dd></div><div><dt>机密下载</dt><dd>动态水印</dd></div><div><dt>下载地址</dt><dd>5分钟有效</dd></div><div><dt>原始文件</dt><dd>受审计访问</dd></div></dl></section></div>
+          <div v-if="settingsSection === 'health'" class="settings-section"><header><h2>运行服务</h2><span>本地开发环境</span></header><div class="service-list"><div><span class="service-icon"><Database :size="20" /></span><div><b>数据持久化</b><small>{{ organization.settings.dataDriver === 'postgres' ? 'PostgreSQL' : '本地文件适配器' }}</small></div><em class="status success">正常</em></div><div><span class="service-icon"><FolderArchive :size="20" /></span><div><b>文件存储</b><small>{{ organization.settings.storageDriver === 'minio' ? 'MinIO对象存储' : '本地文件适配器' }}</small></div><em class="status success">正常</em></div><div><span class="service-icon"><RefreshCw :size="20" /></span><div><b>达铃组织同步</b><small>模拟全量API + 变更回调</small></div><em class="status success">正常</em></div><div><span class="service-icon"><Activity :size="20" /></span><div><b>公网匿名采集</b><small>独立白名单事件服务</small></div><em class="status warning">本地模拟</em></div></div></div>
+          <div v-if="settingsSection === 'storage'" class="settings-grid"><section><header><h2>备份策略</h2><button type="button" @click="createBackup"><RefreshCw :size="16" />立即备份</button></header><dl><div><dt>日备份</dt><dd>保留30天</dd></div><div><dt>月备份</dt><dd>保留12个月</dd></div><div><dt>恢复演练</dt><dd>每季度</dd></div><div><dt>最近验证</dt><dd>{{ organization.settings.lastBackupAt ? formatDate(organization.settings.lastBackupAt) : '待首次执行' }}</dd></div></dl></section><section><header><h2>日志保留</h2></header><dl><div><dt>安全审计</dt><dd>5年</dd></div><div><dt>行为明细</dt><dd>1年</dd></div><div><dt>过期处理</dt><dd>汇总归档</dd></div><div><dt>记录模式</dt><dd>只追加</dd></div></dl></section><section><header><h2>文件安全</h2></header><dl><div><dt>机密预览</dt><dd>动态水印</dd></div><div><dt>机密下载</dt><dd>动态水印</dd></div><div><dt>下载地址</dt><dd>5分钟有效</dd></div><div><dt>原始文件</dt><dd>受审计访问</dd></div></dl></section></div>
         </section>
       </template>
     </main>
