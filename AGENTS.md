@@ -47,6 +47,7 @@ npm run dev:collector
 | 管理后台 | `http://127.0.0.1:5174/` |
 | 业务 API | `http://127.0.0.1:3100/api/health` |
 | 匿名采集 | `http://127.0.0.1:8787/health` |
+| Pages 构建预览 | `http://127.0.0.1:5176/?demo=1` |
 
 本地及 Pages 演示账号：`10000000000` / `Admin@123`。不得用于生产。
 
@@ -59,6 +60,13 @@ npm run build
 npm run build:all
 npm run build:pages
 npm run start:server
+```
+
+预览根目录 Pages 构建产物：
+
+```bash
+npm run build:pages
+npx vite --host 127.0.0.1 --port 5176
 ```
 
 测试、单文件测试和类型检查：
@@ -80,7 +88,7 @@ git diff --check
 git status --short
 ```
 
-`npm run build:pages` 将管理端产物写入根目录 `index.html` 和 `assets/`，供 GitHub Pages 使用。`admin-dist/` 不提交。
+`npm run build:pages` 将管理端产物写入根目录 `index.html` 和 `assets/`，供 GitHub Pages 使用。该脚本会先删除根 `assets/`，再复制带内容哈希的新产物，因此提交时要同时纳入入口文件、删除的旧指纹文件和新增的指纹文件。`admin-dist/` 不提交。
 
 `npm run dev:server` 会先编译服务端，再执行 `server/dist/server/src/main.js`。当前没有 ESLint、Prettier 或独立格式化脚本，不得编造 `npm run lint` 或 `npm run format`；按现有文件风格编辑，并用 `git diff --check` 检查空白错误。
 
@@ -103,14 +111,14 @@ git status --short
 关键文件：
 
 - `admin/src/App.vue`：管理端模块、编辑器、审核、配置和工作台。
-- `admin/src/DashboardView.vue`：治理工作台指标、ChartCube 图表和风险入口。
+- `admin/src/DashboardView.vue`：经营治理驾驶舱的指标、待办、预警、排行、费用、闲置资产和管理提示。
 - `admin/src/FlowNavigator.vue`、`flow-navigation.js`、`flow-layout.js`：可点击业务流程、节点定义和无重叠布局。
 - `admin/src/navigation.js`：集中式菜单、权限过滤和页签恢复；`portal-links.js`：受白名单约束的门户跳转。
 - `admin/src/styles.css`：管理端布局和响应式规则。
 - `admin/src/api.js`：真实 API 请求和下载封装。
 - `admin/src/demo-api.js`：GitHub Pages 浏览器内演示数据。
-- `admin/src/components/ChartCubeChart.vue`：工作台 AntV G2 图表封装。
-- `admin/src/iconfont.js`：工作台 iconfont.cn Symbol 兼容和本地兜底。
+- `admin/src/components/ChartCubeChart.vue`：工作台 AntV G2 折线、横向条形和环形图封装。
+- `admin/src/iconfont.js`、`components/IconFont.vue`：iconfont.cn Symbol 兼容层和本地兜底；当前标准业务图标仍以 Lucide 为主。
 - `server/src/controllers.ts`：HTTP 路由，保持轻量。
 - `server/src/state.service.ts`：核心领域、权限、审核、发布和幂等规则。
 - `server/src/portal-dataset.ts`：内部和公开数据裁剪。
@@ -118,7 +126,8 @@ git status --short
 - `server/src/storage.service.ts`：本地/MinIO 文件和动态水印。
 - `server/src/seed.ts`：仅用于开发的虚构种子数据。
 - `server/test/state.test.ts`：核心领域测试。
-- `shared/contracts.ts`：领域对象和枚举的唯一结构来源。
+- `shared/contracts.ts`：领域对象和枚举的唯一结构来源，包含资产、知识产权、附件、维护费用、日志和门户数据契约。
+- `shared/portal-targets.js`：流程导航可打开的门户锚点白名单。
 - `collector/server.mjs`：匿名行为采集白名单服务。
 - `scripts/publish-admin-pages.mjs`：将 `admin-dist/` 转换为根目录 Pages 入口和 `assets/`。
 - `server/sql/001_initial.sql`：PostgreSQL 状态持久化和审计不可变约束。
@@ -129,7 +138,7 @@ git status --short
 
 - `admin-dist/`、`server/dist/`：构建输出，不直接编辑且不提交。
 - `server/data/`、`server/uploads/`、`server/backups/`、`server/releases/`、`collector/data/`：运行状态、附件、备份、快照和采集数据，不提交。
-- 根目录 `index.html` 和 `assets/`：`npm run build:pages` 生成的 Pages 产物；只有管理端发布任务才更新并提交。
+- 根目录 `index.html` 和 `assets/`：`npm run build:pages` 生成的 Pages 产物；只有管理端发布任务才更新并提交，禁止保留入口已不引用的旧指纹资源。
 
 新增字段至少同步检查契约、种子、`StateService`、门户裁剪、管理端、服务端测试和 `PortalDataset` 兼容性。不要在前后端维护两套枚举。
 
@@ -138,6 +147,16 @@ git status --short
 管理端包含：工作台、资产中心、知识产权、资料与文件、投入与治理、展示配置、审核发布、组织与权限、系统开放、系统任务、日志与分析、系统管理。
 
 资产类型包含案例、行业、平台、产品、SaaS、场景、硬件、设备、资料、知识产权和治理资产。
+
+工作台当前由 `GET /api/dashboard` 驱动，并按登录人的公司、部门或个人可见范围裁剪。Pages 演示必须在 `admin/src/demo-api.js` 保持同结构，不能只修改页面中的静态数字。当前驾驶舱基线包括：
+
+- 资产总量、近 30 天活跃、90 天闲置、待办、更新维护预警和本年公共维护费用 6 项指标。
+- 内容审核、知识产权提醒和系统异常组成的待办事项。
+- 更新维护预警、资产调用使用 Top 5、专利/软著占比和资产内容新鲜度。
+- 公共维护费用趋势、费用分类、60 天内维护费用，费用类别来自 `MaintenanceExpenseRecord`。
+- 近 7 日维护与使用趋势、闲置资产优先复核和面向管理者的本期管理提示。
+
+工作台卡片和列表节点通过导航 ID 跳转，新增入口必须在 `admin/src/navigation.js` 存在并通过权限过滤。流程导航是隐藏路由 `flow.navigator`，节点只允许指向现有管理路由或 `shared/portal-targets.js` 白名单中的门户锚点。
 
 ## 5. 权限与发布
 
@@ -224,13 +243,15 @@ LOCAL_UPLOAD_DIR=server/uploads
 ## 10. UI 约束
 
 - 管理端保持深色顶部栏、左侧图标导航、紧凑表格和汉脑蓝绿配色。
-- 标准功能图标优先使用 `@lucide/vue`；工作台指标图标使用 iconfont Symbol 兼容层。
+- 标准功能和当前工作台图标优先使用 `@lucide/vue`；只有明确提供 iconfont Symbol ID 时才使用现有兼容层，不新增手绘 SVG。
 - 卡片圆角不超过 8px，不嵌套装饰卡片。
 - 桌面、平板、手机均不得整页横向溢出、文字重叠或控件跳动。
 - 工作台图表使用 `ChartCubeChart.vue` 和 AntV G2，不引入旧 G2Plot。
-- “近 7 日资产活跃趋势”的每个数据点常驻显示数值。
-- “资产状态构成”的环形分段常驻显示数量，图例显示数量和占比。
-- “部门资产贡献”使用细横向条形，末端常驻显示数值；不得恢复为粗条。
+- 折线图的数据点数值常驻显示，点图层关闭独立 tooltip，避免同一数值重复出现。
+- 环形分段常驻显示数量，页面图例同时显示数量和占比。
+- 排行与费用分类使用细横向条形，末端常驻显示数值；不得恢复为粗条。
+- 宽屏下“近7日维护与使用趋势”和“闲置资产优先复核”同排，“本期管理提示”占下一整行；响应式换行不能改变内容顺序。
+- 工作台所有指标、图表、待办和提示必须同时支持真实 API 与 `?demo=1`，不能只在其中一种模式更新。
 
 ## 11. 代码规范
 
@@ -248,7 +269,7 @@ LOCAL_UPLOAD_DIR=server/uploads
 ### Vue、图表与样式
 
 - 管理端复用 `admin/src/api.js` 和现有组件边界；Pages 演示能力集中在 `demo-api.js`，不得混入真实 API 实现。
-- 标准功能图标优先使用 `@lucide/vue`；指标图标通过 `IconFont.vue` 和 `iconfont.js` 使用现有 iconfont 兼容层。
+- 标准功能图标优先使用 `@lucide/vue`；`IconFont.vue` 和 `iconfont.js` 只承接已有 Symbol ID 与公司的 iconfont 项目地址。
 - 工作台图表统一复用 `ChartCubeChart.vue` 和 AntV G2；图表数据、常驻标签、加载失败及空状态必须完整呈现。
 - API 加载、空数据、失败、无权限和提交中状态必须有明确反馈。前端按钮隐藏不能代替服务端授权。
 - CSS 遵循现有命名、双引号、分号和响应式断点。固定格式组件使用稳定的网格或尺寸约束，避免悬浮、数字和文字引起布局跳动。
@@ -278,6 +299,7 @@ npx tsc -p server/tsconfig.json --noEmit
 
 - 每个测试独立创建服务和状态，不依赖执行顺序，不复用其他测试修改过的对象。
 - 管理端导航或流程变化必须补充 `admin/test/`，校验唯一导航 ID、权限过滤、状态恢复、节点目标及节点/连线无重叠。
+- 工作台数据结构变化必须同步更新 `StateService.dashboard()`、`admin/src/demo-api.js`、`DashboardView.vue` 和服务端工作台测试，确保真实 API 与 Pages 演示一致。
 - 优先使用构造函数注入和小型内存 fake。参考 `server/test/state.test.ts` 的 `MemoryPersistence`：`load()` 返回内存状态，`save()` 使用 `structuredClone`，然后调用 `StateService.onModuleInit()`。
 - 使用 `server/src/seed.ts` 的确定性数据作为 fixture；需要稳定时间、ID 或外部响应时，在测试边界固定输入。
 - 单元测试不得连接真实 PostgreSQL、MinIO、短信、达铃或目标系统，也不得写入本地运行状态、上传、备份和发布目录。
@@ -314,7 +336,9 @@ npx tsc -p server/tsconfig.json --noEmit
 远端：`https://github.com/qinburi/wuxingzic-houtai-.git`，默认分支 `main`。
 
 - 不回退用户修改，不强推。
-- 推送前获取远端状态；出现新提交先检查和合并。
+- 推送前运行 `git remote get-url origin`，结果必须与上面的远端完全一致；不得从指向 `qinburi/-.git` 或其他仓库的工作副本推送。
+- 推送前运行 `git fetch origin main` 和 `git rev-list --left-right --count origin/main...main`；出现远端新提交先检查和合并。
 - 只提交当前任务相关源码、文档和必要 Pages 产物。
+- 文档任务只提交 `AGENTS.md`；除非管理端源码发生变化，否则不要为文档任务重新生成或提交 Pages 产物。
 - 推送超时时可用 `git -c http.version=HTTP/1.1 push origin main` 重试，禁止 `--force`。
 - 推送后确认远端提交、Pages 部署状态，并打开线上页面验证。
