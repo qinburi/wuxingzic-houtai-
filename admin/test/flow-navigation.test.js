@@ -98,6 +98,24 @@ test("swimlane layout keeps nodes and orthogonal routes separated", () => {
   }
 });
 
+test("wide flow canvas keeps nodes and connectors in one coordinate system", () => {
+  const baseLayout = buildFlowLayout(flowDefinitions[0]);
+  const wideLayout = buildFlowLayout(flowDefinitions[0], 1760.8);
+  assert.equal(wideLayout.width, 1760);
+  assert.ok(wideLayout.laneWidth > baseLayout.laneWidth);
+  assert.ok(wideLayout.nodes.every((node) => node.x >= 0 && node.x + node.width <= wideLayout.width));
+  for (const edge of wideLayout.edges) {
+    const source = wideLayout.nodes.find((node) => node.id === edge.from);
+    const target = wideLayout.nodes.find((node) => node.id === edge.to);
+    const [startX, startY] = edge.points[0];
+    const [endX, endY] = edge.points.at(-1);
+    const touchesSource = startX === source.x || startX === source.x + source.width || startY === source.y + source.height;
+    const touchesTarget = endX === target.x || endX === target.x + target.width || endY === target.y;
+    assert.equal(touchesSource, true, `${edge.id}: source endpoint drifted`);
+    assert.equal(touchesTarget, true, `${edge.id}: target endpoint drifted`);
+  }
+});
+
 test("every flow node targets an existing admin route or approved portal anchor", () => {
   const routeIds = new Set(flattenNavigation(navigationGroups).map((item) => item.id));
   for (const node of allFlowNodes()) {

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   Activity,
   AlertTriangle,
@@ -46,9 +46,12 @@ const iconComponents = {
 const activeFlowId = ref(flowDefinitions[0].id);
 const hoveredNodeId = ref("");
 const hoveredLaneId = ref("");
+const canvasViewport = ref(null);
+const canvasWidth = ref(0);
+let canvasResizeObserver;
 const activeFlow = computed(() => flowDefinitions.find((flow) => flow.id === activeFlowId.value) || flowDefinitions[0]);
 const accessibleRoutes = computed(() => new Set(props.accessibleRouteIds));
-const layout = computed(() => buildFlowLayout(activeFlow.value));
+const layout = computed(() => buildFlowLayout(activeFlow.value, canvasWidth.value));
 const activeNodeId = computed(() => hoveredNodeId.value);
 const lanePalette = [
   { color: "#3976b8", soft: "#eef5fc" },
@@ -84,6 +87,29 @@ function switchFlow(flowId) {
   hoveredNodeId.value = "";
   hoveredLaneId.value = "";
 }
+
+function updateCanvasWidth() {
+  const width = canvasViewport.value?.clientWidth || 0;
+  canvasWidth.value = width > 0 ? width : 0;
+}
+
+onMounted(async () => {
+  await nextTick();
+  updateCanvasWidth();
+  if (typeof ResizeObserver !== "undefined" && canvasViewport.value) {
+    canvasResizeObserver = new ResizeObserver(updateCanvasWidth);
+    canvasResizeObserver.observe(canvasViewport.value);
+  } else {
+    window.addEventListener("resize", updateCanvasWidth);
+  }
+});
+
+onBeforeUnmount(() => {
+  canvasResizeObserver?.disconnect();
+  window.removeEventListener("resize", updateCanvasWidth);
+});
+
+watch(activeFlowId, () => nextTick(updateCanvasWidth));
 
 function laneStyle(laneIndex) {
   const palette = lanePalette[laneIndex % lanePalette.length];
@@ -161,7 +187,7 @@ function incomingLabel(node) {
     </div>
 
     <div class="flow-board">
-      <div class="flow-canvas-viewport">
+      <div ref="canvasViewport" class="flow-canvas-viewport">
         <div class="flow-canvas" :style="{ width: `${layout.width}px`, height: `${layout.height}px` }">
           <div class="flow-direction-label"><span>业务流程</span><b>↓</b></div>
           <div
@@ -186,7 +212,14 @@ function incomingLabel(node) {
             :style="{ top: `${FLOW_LAYOUT.headerHeight + rowIndex * FLOW_LAYOUT.rowHeight}px` }"
           ></span>
 
-          <svg class="flow-connectors" :viewBox="`0 0 ${layout.width} ${layout.height}`" aria-hidden="true">
+          <svg
+            class="flow-connectors"
+            :width="layout.width"
+            :height="layout.height"
+            :viewBox="`0 0 ${layout.width} ${layout.height}`"
+            preserveAspectRatio="xMinYMin meet"
+            aria-hidden="true"
+          >
             <defs>
               <marker id="flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" /></marker>
               <marker id="flow-arrow-warning" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" /></marker>
@@ -284,7 +317,7 @@ function incomingLabel(node) {
 .flow-legend { display: flex; align-items: center; gap: 13px; color: #6b7a84; font-size: 9px; }.flow-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }.flow-legend i { width: 22px; height: 0; border-top: 2px solid #75828a; }.flow-legend .legend-system { border-color: #269aab; border-top-style: dashed; }.flow-legend .legend-return { border-color: #df8b17; border-top-style: dashed; }
 .flow-board { background: white; border: 1px solid #d4dce1; border-top: 0; }
 .flow-canvas-viewport { max-width: 100%; overflow: auto; }
-.flow-canvas { position: relative; min-width: 100%; overflow: hidden; background: #fbfcfd; }
+.flow-canvas { position: relative; min-width: 0; overflow: hidden; background: #fbfcfd; }
 .flow-direction-label { position: absolute; z-index: 4; left: 3px; top: 7px; display: grid; justify-items: center; gap: 1px; color: #77858e; font-size: 8px; pointer-events: none; }
 .flow-direction-label span { writing-mode: vertical-rl; }.flow-direction-label b { color: #37a68d; font-size: 12px; }
 .flow-lane { position: absolute; z-index: 0; background: color-mix(in srgb, var(--lane-soft) 44%, white); border-right: 1px dashed #c7d2d8; transition: opacity .18s ease, background .18s ease; }

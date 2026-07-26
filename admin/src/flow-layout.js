@@ -88,10 +88,11 @@ function buildEdgeGeometry(edge, nodeMap, outgoing, incoming, width) {
   return { ...edge, path: pathFromPoints(points), points, labelX, labelY, labelWidth };
 }
 
-export function buildFlowLayout(flow) {
+export function buildFlowLayout(flow, availableWidth = 0) {
   const width = Math.max(
     FLOW_LAYOUT.canvasMinWidth,
-    FLOW_LAYOUT.canvasSidePadding * 2 + flow.lanes.length * FLOW_LAYOUT.laneMinWidth
+    FLOW_LAYOUT.canvasSidePadding * 2 + flow.lanes.length * FLOW_LAYOUT.laneMinWidth,
+    Number.isFinite(availableWidth) ? Math.floor(availableWidth) : 0
   );
   const laneWidth = (width - FLOW_LAYOUT.canvasSidePadding * 2) / flow.lanes.length;
   const maxRow = Math.max(1, ...flow.nodes.map((node) => node.row));
